@@ -1058,7 +1058,7 @@
   function renderAnalysis(portfolio) {
     if (!els.analysisChart) return;
     syncAnalysisFilters();
-    const data = buildAnalysisData(portfolio);
+    const data = buildAnalysisData(portfolio, getPortfolioTimeline());
     renderAnalysisSummary(data);
     drawAnalysisChart(data.points);
     renderAnalysisCalendar(data.points);
@@ -1066,7 +1066,7 @@
     primeAnalysisHistory(portfolio, activeAnalysisType);
   }
 
-  function buildAnalysisData(portfolio) {
+  function buildAnalysisData(portfolio, timeline = getPortfolioTimeline()) {
     const now = new Date();
     const days = activeAnalysisRange === "1m" ? 31 : activeAnalysisRange === "1y" ? 366 : 92;
     const start = new Date(now);
@@ -1076,92 +1076,15 @@
     const txRows = getSortedTransactions()
       .filter((tx) => (tx.status || "confirmed") === "confirmed")
       .filter((tx) => activeAnalysisType === "all" || tx.type === activeAnalysisType || (activeAnalysisType === "fund" && tx.type === "etf"));
-    const firstTxDate = txRows.find((tx) => tx.date)?.date || endKey;
-    const simulationStart = new Date(`${firstTxDate}T00:00:00`);
-
-    const txByDate = new Map();
-    txRows.forEach((tx) => {
-      const key = tx.date || "";
-      if (!key) return;
-      if (!txByDate.has(key)) txByDate.set(key, []);
-      txByDate.get(key).push(tx);
-    });
-
-    const points = [];
-    const running = new Map();
-    let cash = 0;
-    let realized = 0;
-    let dividends = 0;
-    let invested = 0;
-    let previousPnl = 0;
-
-    for (let cursor = simulationStart; cursor <= now; cursor.setDate(cursor.getDate() + 1)) {
-      const dateKey = cursor.toISOString().slice(0, 10);
-      (txByDate.get(dateKey) || []).forEach((tx) => {
-        const rate = fx[tx.currency] || 1;
-        const price = number(tx.price);
-        const fee = number(tx.fee) * rate;
-        const shares = getTransactionShares(tx);
-        const gross = getTransactionGross(tx) * rate;
-        if (isCashInAction(tx.action)) {
-          cash += gross;
-          invested += gross;
-          return;
-        }
-        if (isCashOutAction(tx.action)) {
-          cash -= gross;
-          invested -= gross;
-          return;
-        }
-        if (isDividendAction(tx.action)) {
-          cash += gross;
-          dividends += gross;
-          return;
-        }
-        const symbol = normalizeSymbol(tx.symbol);
-        if (!running.has(symbol)) {
-          running.set(symbol, { symbol, name: tx.name || symbol, type: tx.type || "fund", quantity: 0, cost: 0, realized: 0 });
-        }
-        const item = running.get(symbol);
-        item.name = tx.name || item.name;
-        item.type = tx.type || item.type;
-        if (isBuyAction(tx.action)) {
-          item.quantity += shares;
-          item.cost += gross + fee;
-          cash -= gross + fee;
-        }
-        if (isSellAction(tx.action)) {
-          const avgCost = item.quantity > 0 ? item.cost / item.quantity : 0;
-          const removedCost = Math.min(shares, item.quantity) * avgCost;
-          const proceeds = gross - fee;
-          item.quantity -= shares;
-          item.cost -= removedCost;
-          item.realized += proceeds - removedCost;
-          realized += proceeds - removedCost;
-          cash += proceeds;
-        }
-      });
-
-      const holdings = Array.from(running.values()).filter((item) => Math.abs(item.quantity) > 0.000001);
-      const marketValue = holdings.reduce((sum, item) => sum + item.quantity * estimateAnalysisPrice(item, dateKey), 0);
-      const cost = holdings.reduce((sum, item) => sum + item.cost, 0);
-      const pnl = marketValue - cost + realized + dividends;
-      points.push({
-        time: dateKey,
-        value: roundMoney(pnl),
-        marketValue: roundMoney(marketValue),
-        cost: roundMoney(cost),
-        invested: roundMoney(invested),
-        cash: roundMoney(cash),
-        dailyPnl: roundMoney(pnl - previousPnl),
-        transactions: (txByDate.get(dateKey) || []).length,
-        missingHistory: holdings.some((item) => !analysisHistoryCache.has(historyCacheKey(item.symbol, dateKey)))
-      });
-      previousPnl = pnl;
-    }
 
     const contributors = computeAnalysisContributors(portfolio, activeAnalysisType);
-    const visiblePoints = points.filter((point) => (!rangeStartKey || point.time >= rangeStartKey) && point.time <= endKey);
+    const visiblePoints = timeline
+      .filter((point) => txRows.some((tx) => tx.date <= point.time))
+      .filter((point) => (!rangeStartKey || point.time >= rangeStartKey) && point.time <= endKey)
+      .map((point) => ({
+        ...point,
+        value: point.pnl
+      }));
     const coveredDays = visiblePoints.filter((point) => !point.missingHistory || point.marketValue === 0).length;
     return {
       points: visiblePoints,
@@ -1217,6 +1140,11 @@
   function drawAnalysisChart(points) {
     ensureAnalysisChart();
     if (!analysisSeriesApi) return;
+    if (!points.length) {
+      showInlineChartEmpty(els.analysisChart, "导入交易流水后生成盈亏曲线");
+      return;
+    }
+    clearInlineChartEmpty(els.analysisChart);
     const data = points.map((point) => ({ time: point.time, value: point.value }));
     analysisSeriesApi.setData(data);
     if (analysisChartApi) analysisChartApi.timeScale().fitContent();
@@ -1232,8 +1160,11 @@
         timeScale: {
           borderVisible: false,
           timeVisible: false,
-          rightOffset: 6,
-          barSpacing: 7
+          rightOffset: 4,
+          barSpacing: 7,
+          minBarSpacing: 5,
+          fixLeftEdge: true,
+          fixRightEdge: true
         }
       });
       analysisSeriesApi = analysisChartApi.addSeries(LightweightCharts.AreaSeries, {
@@ -1350,9 +1281,104 @@
     return `${normalizeSymbol(symbol)}:${dateKey}`;
   }
 
+  function getPortfolioTimeline() {
+    const now = new Date();
+    const endKey = now.toISOString().slice(0, 10);
+    const txRows = getSortedTransactions().filter((tx) => (tx.status || "confirmed") === "confirmed");
+    const firstTxDate = txRows.find((tx) => tx.date)?.date || endKey;
+    const simulationStart = new Date(`${firstTxDate}T00:00:00`);
+    const txByDate = new Map();
+    txRows.forEach((tx) => {
+      if (!tx.date) return;
+      if (!txByDate.has(tx.date)) txByDate.set(tx.date, []);
+      txByDate.get(tx.date).push(tx);
+    });
+
+    const points = [];
+    const running = new Map();
+    let cash = 0;
+    let realized = 0;
+    let dividends = 0;
+    let invested = 0;
+    let previousPnl = 0;
+
+    for (let cursor = simulationStart; cursor <= now; cursor.setDate(cursor.getDate() + 1)) {
+      const dateKey = cursor.toISOString().slice(0, 10);
+      (txByDate.get(dateKey) || []).forEach((tx) => {
+        const rate = fx[tx.currency] || 1;
+        const fee = number(tx.fee) * rate;
+        const shares = getTransactionShares(tx);
+        const gross = getTransactionGross(tx) * rate;
+        if (isCashInAction(tx.action)) {
+          cash += gross;
+          invested += gross;
+          return;
+        }
+        if (isCashOutAction(tx.action)) {
+          cash -= gross;
+          invested -= gross;
+          return;
+        }
+        if (isDividendAction(tx.action)) {
+          cash += gross;
+          dividends += gross;
+          return;
+        }
+        const symbol = normalizeSymbol(tx.symbol);
+        if (!running.has(symbol)) {
+          running.set(symbol, { symbol, name: tx.name || symbol, type: tx.type || "fund", quantity: 0, cost: 0, realized: 0 });
+        }
+        const item = running.get(symbol);
+        item.name = tx.name || item.name;
+        item.type = tx.type || item.type;
+        if (isBuyAction(tx.action)) {
+          item.quantity += shares;
+          item.cost += gross + fee;
+          cash -= gross + fee;
+        }
+        if (isSellAction(tx.action)) {
+          const avgCost = item.quantity > 0 ? item.cost / item.quantity : 0;
+          const removedCost = Math.min(shares, item.quantity) * avgCost;
+          const proceeds = gross - fee;
+          item.quantity -= shares;
+          item.cost -= removedCost;
+          item.realized += proceeds - removedCost;
+          realized += proceeds - removedCost;
+          cash += proceeds;
+        }
+      });
+
+      const holdings = Array.from(running.values()).filter((item) => Math.abs(item.quantity) > 0.000001);
+      const marketValue = holdings.reduce((sum, item) => sum + item.quantity * estimateAnalysisPrice(item, dateKey), 0);
+      const cost = holdings.reduce((sum, item) => sum + item.cost, 0);
+      const pnl = marketValue - cost + realized + dividends;
+      const totalValue = marketValue + cash;
+      points.push({
+        time: dateKey,
+        value: roundMoney(totalValue),
+        pnl: roundMoney(pnl),
+        marketValue: roundMoney(marketValue),
+        cost: roundMoney(cost),
+        invested: roundMoney(invested),
+        cash: roundMoney(cash),
+        dailyPnl: roundMoney(pnl - previousPnl),
+        transactions: (txByDate.get(dateKey) || []).length,
+        missingHistory: holdings.some((item) => !analysisHistoryCache.has(historyCacheKey(item.symbol, dateKey)))
+      });
+      previousPnl = pnl;
+    }
+
+    return points;
+  }
+
   function drawWealthChart(portfolio) {
     ensureWealthChart();
     const points = buildWealthSeries(portfolio, activeRange);
+    if (!points.length || (points.length === 1 && !points[0].value)) {
+      showInlineChartEmpty(els.wealthChart, "导入交易流水后生成资产曲线");
+      return;
+    }
+    clearInlineChartEmpty(els.wealthChart);
     wealthSeriesApi.setData(points.map((point) => ({
       time: point.time,
       value: point.value
@@ -1364,23 +1390,13 @@
   function buildWealthSeries(portfolio, range) {
     const days = range === "1m" ? 30 : range === "1y" ? 365 : 90;
     const now = new Date();
-    const points = [];
-    const base = portfolio.totalValue || 1;
-    for (let index = days - 1; index >= 0; index -= 1) {
-      const date = new Date(now);
-      date.setDate(now.getDate() - index);
-      const progress = (days - index) / days;
-      const wave = Math.sin(progress * Math.PI * 4) * 0.025 + Math.cos(progress * Math.PI * 2.2) * 0.018;
-      const slope = (progress - 1) * -0.07;
-      const value = base * (1 + slope + wave);
-      points.push({
-        time: date.toISOString().slice(0, 10),
-        date: date.toISOString().slice(5, 10),
-        value
-      });
-    }
-    points[points.length - 1].value = base;
-    return points;
+    const start = new Date(now);
+    start.setDate(now.getDate() - days + 1);
+    const startKey = start.toISOString().slice(0, 10);
+    const timeline = getPortfolioTimeline().filter((point) => point.time >= startKey);
+    if (timeline.length) return timeline.map((point) => ({ time: point.time, date: point.time.slice(5), value: point.value }));
+    const today = now.toISOString().slice(0, 10);
+    return [{ time: today, date: today.slice(5), value: portfolio.totalValue || 0 }];
   }
 
   function ensureWealthChart() {
@@ -1396,8 +1412,11 @@
           borderVisible: false,
           timeVisible: false,
           secondsVisible: false,
-          rightOffset: 6,
-          barSpacing: 8
+          rightOffset: 4,
+          barSpacing: 7,
+          minBarSpacing: 5,
+          fixLeftEdge: true,
+          fixRightEdge: true
         }
       });
       wealthSeriesApi = wealthChartApi.addSeries(LightweightCharts.AreaSeries, {
@@ -1443,7 +1462,12 @@
       },
       rightPriceScale: {
         borderVisible: false,
-        scaleMargins: { top: 0.16, bottom: 0.14 }
+        entireTextOnly: true,
+        scaleMargins: { top: 0.18, bottom: 0.18 }
+      },
+      leftPriceScale: {
+        visible: false,
+        borderVisible: false
       },
       handleScroll: {
         mouseWheel: true,
@@ -2407,8 +2431,11 @@
           borderVisible: false,
           timeVisible: range === "intraday",
           secondsVisible: false,
-          rightOffset: 8,
-          barSpacing: range === "intraday" ? 4 : 8
+          rightOffset: 4,
+          barSpacing: range === "intraday" ? 4 : 8,
+          minBarSpacing: 2,
+          fixLeftEdge: true,
+          fixRightEdge: true
         },
         localization: {
           priceFormatter: (price) => formatChartPrice(price)
@@ -2421,8 +2448,11 @@
           borderVisible: false,
           timeVisible: range === "intraday",
           secondsVisible: false,
-          rightOffset: 8,
-          barSpacing: range === "intraday" ? 4 : 8
+          rightOffset: 4,
+          barSpacing: range === "intraday" ? 4 : 8,
+          minBarSpacing: 2,
+          fixLeftEdge: true,
+          fixRightEdge: true
         },
         localization: {
           priceFormatter: (price) => formatChartPrice(price)
@@ -2506,6 +2536,19 @@
   }
 
   function clearChartEmpty(container) {
+    const empty = container.querySelector(".chart-empty");
+    if (empty) empty.remove();
+  }
+
+  function showInlineChartEmpty(container, message) {
+    clearInlineChartEmpty(container);
+    const empty = document.createElement("div");
+    empty.className = "chart-empty";
+    empty.textContent = message;
+    container.appendChild(empty);
+  }
+
+  function clearInlineChartEmpty(container) {
     const empty = container.querySelector(".chart-empty");
     if (empty) empty.remove();
   }
