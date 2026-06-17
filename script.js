@@ -1,5 +1,7 @@
 (function () {
   const storageKey = "nanstar-wealth-v1";
+  const syncMetaKey = "nanstar-wealth-sync-meta";
+  const syncTokenKey = "nanstar-wealth-sync-token";
   const themeKey = "nanstar-wealth-theme";
   const palette = ["#34d399", "#60a5fa", "#f59e0b", "#fb7185", "#a78bfa", "#22d3ee", "#f97316"];
   const typeNames = {
@@ -199,11 +201,17 @@
     toast: document.getElementById("toast")
   };
 
+  let localStateSource = "sample";
   const state = loadState();
   let activeType = "all";
   let activeRange = "3m";
   let activeTransactionFilter = "all";
   let latestLookup = null;
+  let cloudSyncReady = false;
+  let cloudSyncTimer = null;
+  let cloudSyncInFlight = false;
+  let cloudSyncQueued = false;
+  let cloudSyncNoticeShown = false;
   const lookupBySymbol = new Map();
 
   init();
@@ -240,6 +248,7 @@
     document.getElementById("openTransactionButton").addEventListener("click", openDrawer);
     document.getElementById("openTransactionButton2").addEventListener("click", openDrawer);
     document.getElementById("openWatchlistButton").addEventListener("click", openWatchlistDrawer);
+    document.getElementById("syncTokenButton").addEventListener("click", configureSyncToken);
     document.getElementById("closeDrawerButton").addEventListener("click", closeDrawer);
     document.getElementById("closeInstrumentButton").addEventListener("click", closeInstrumentDrawer);
     els.backdrop.addEventListener("click", () => {
@@ -274,21 +283,145 @@
     ensureStateShape();
     updateInputModeLabels();
     render();
-    refreshMarketData();
+    syncCloudState().finally(() => refreshMarketData());
   }
 
   function loadState() {
     try {
       const stored = localStorage.getItem(storageKey);
-      if (stored) return JSON.parse(stored);
+      if (stored) {
+        localStateSource = "stored";
+        return JSON.parse(stored);
+      }
     } catch {
       // Ignore broken local data and fall back to the bundled sample.
     }
     return JSON.parse(JSON.stringify(sampleState));
   }
 
-  function persist() {
+  function persist(options = {}) {
     localStorage.setItem(storageKey, JSON.stringify(state));
+    const meta = getSyncMeta();
+    meta.localUpdatedAt = new Date().toISOString();
+    if (options.sync !== false) {
+      meta.dirty = true;
+      setSyncMeta(meta);
+      scheduleCloudSave();
+      return;
+    }
+    setSyncMeta(meta);
+  }
+
+  function getSyncMeta() {
+    try {
+      return JSON.parse(localStorage.getItem(syncMetaKey) || "{}") || {};
+    } catch {
+      return {};
+    }
+  }
+
+  function setSyncMeta(meta) {
+    localStorage.setItem(syncMetaKey, JSON.stringify(meta || {}));
+  }
+
+  function cloudHeaders() {
+    const headers = { "Content-Type": "application/json" };
+    const token = localStorage.getItem(syncTokenKey);
+    if (token) headers["x-nanstar-sync-token"] = token;
+    return headers;
+  }
+
+  function configureSyncToken() {
+    const current = localStorage.getItem(syncTokenKey) || "";
+    const next = window.prompt("输入 NanStar Wealth 云端同步口令。留空会清除本机口令。", current);
+    if (next === null) return;
+    const token = next.trim();
+    if (token) {
+      localStorage.setItem(syncTokenKey, token);
+      cloudSyncReady = true;
+      showToast("同步口令已保存");
+      syncCloudState().finally(() => scheduleCloudSave(0));
+      return;
+    }
+    localStorage.removeItem(syncTokenKey);
+    cloudSyncReady = false;
+    showToast("已清除同步口令");
+  }
+
+  async function syncCloudState() {
+    try {
+      const response = await fetch("/api/state", { cache: "no-store", headers: cloudHeaders() });
+      if (response.status === 401 || response.status === 403 || response.status === 503) return;
+      if (!response.ok) throw new Error(`云端同步失败 ${response.status}`);
+      const data = await response.json();
+      cloudSyncReady = true;
+      const remoteState = data.state;
+      const remoteUpdatedAt = data.updatedAt || "";
+      const meta = getSyncMeta();
+
+      if (remoteState && (localStateSource !== "stored" || (!meta.dirty && remoteUpdatedAt && remoteUpdatedAt !== meta.remoteUpdatedAt))) {
+        replaceState(remoteState);
+        ensureStateShape();
+        persist({ sync: false });
+        setSyncMeta({ ...getSyncMeta(), remoteUpdatedAt, dirty: false });
+        render();
+        if (!cloudSyncNoticeShown) {
+          showToast("已从云端同步数据");
+          cloudSyncNoticeShown = true;
+        }
+        return;
+      }
+
+      if (!remoteState && localStateSource === "stored") {
+        scheduleCloudSave(0);
+      }
+    } catch {
+      // Keep local-first behavior when the cloud endpoint is unavailable.
+    }
+  }
+
+  function replaceState(nextState) {
+    Object.keys(state).forEach((key) => delete state[key]);
+    Object.assign(state, JSON.parse(JSON.stringify(nextState || sampleState)));
+  }
+
+  function scheduleCloudSave(delay = 900) {
+    if (!cloudSyncReady) return;
+    clearTimeout(cloudSyncTimer);
+    cloudSyncTimer = setTimeout(() => pushCloudState(), delay);
+  }
+
+  async function pushCloudState() {
+    if (cloudSyncInFlight) {
+      cloudSyncQueued = true;
+      return;
+    }
+    cloudSyncInFlight = true;
+    try {
+      const response = await fetch("/api/state", {
+        method: "PUT",
+        headers: cloudHeaders(),
+        body: JSON.stringify({ state })
+      });
+      if (response.status === 401 || response.status === 403 || response.status === 503) return;
+      if (!response.ok) throw new Error(`云端保存失败 ${response.status}`);
+      const data = await response.json();
+      setSyncMeta({ ...getSyncMeta(), remoteUpdatedAt: data.updatedAt || "", dirty: false });
+      if (!cloudSyncNoticeShown) {
+        showToast("云端同步已开启");
+        cloudSyncNoticeShown = true;
+      }
+    } catch {
+      const meta = getSyncMeta();
+      meta.dirty = true;
+      setSyncMeta(meta);
+    } finally {
+      cloudSyncInFlight = false;
+      if (cloudSyncQueued) {
+        cloudSyncQueued = false;
+        scheduleCloudSave(500);
+      }
+    }
   }
 
   async function refreshMarketData() {
@@ -340,7 +473,7 @@
     }));
 
     if (updated) {
-      persist();
+      persist({ sync: false });
       render();
     }
   }

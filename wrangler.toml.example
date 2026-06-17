@@ -1,0 +1,7 @@
+name = "nanstar-wealth"
+compatibility_date = "2026-06-17"
+
+[[d1_databases]]
+binding = "NANSTAR_WEALTH_DB"
+database_name = "nanstar-wealth"
+database_id = "replace-with-your-d1-database-id"

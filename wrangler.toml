@@ -1,0 +1,9 @@
+name = "nanstar-wealth"
+compatibility_date = "2026-06-17"
+
+pages_build_output_dir = "."
+
+[[d1_databases]]
+binding = "NANSTAR_WEALTH_DB"
+database_name = "nanstar-wealth"
+database_id = "06a77c23-4a93-41fb-a00c-9661ca8fa370"
