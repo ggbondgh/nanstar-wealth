@@ -26,137 +26,21 @@
     failed: "失败",
     canceled: "已撤销"
   };
+  const demoSeedTransactionIds = new Set(["tx-001", "tx-002", "tx-003", "tx-004", "tx-005", "tx-006", "tx-007"]);
   const fx = {
     CNY: 1,
     USD: 7.22,
     HKD: 0.92
   };
 
-  const sampleState = {
-    prices: {
-      AAPL: 214.8,
-      NVDA: 143.2,
-      "510300": 4.18,
-      "000001.OF": 1.42,
-      CASH: 1
-    },
-    dayChangePct: {
-      AAPL: 0.012,
-      NVDA: -0.008,
-      "510300": 0.004,
-      "000001.OF": -0.002,
-      CASH: 0
-    },
-    watchlist: [
-      {
-        symbol: "002611",
-        name: "博时黄金ETF联接C",
-        type: "fund",
-        currency: "CNY",
-        note: "黄金基金观察"
-      }
-    ],
-    transactions: [
-      {
-        id: "tx-001",
-        date: "2026-01-05",
-        action: "deposit",
-        symbol: "CASH",
-        name: "现金",
-        type: "cash",
-        account: "主账户",
-        quantity: 80000,
-        price: 1,
-        fee: 0,
-        currency: "CNY",
-        note: "年初转入投资账户"
-      },
-      {
-        id: "tx-002",
-        date: "2026-01-12",
-        action: "buy",
-        symbol: "510300",
-        name: "沪深300ETF",
-        type: "etf",
-        account: "A股账户",
-        quantity: 9000,
-        price: 3.85,
-        fee: 5,
-        currency: "CNY",
-        note: "核心指数仓位，分批建仓"
-      },
-      {
-        id: "tx-003",
-        date: "2026-02-03",
-        action: "buy",
-        symbol: "AAPL",
-        name: "Apple",
-        type: "stock",
-        account: "美股账户",
-        quantity: 28,
-        price: 189.2,
-        fee: 1,
-        currency: "USD",
-        note: "消费电子和服务收入观察仓"
-      },
-      {
-        id: "tx-004",
-        date: "2026-02-18",
-        action: "buy",
-        symbol: "000001.OF",
-        name: "主动权益基金",
-        type: "fund",
-        account: "基金账户",
-        quantity: 18000,
-        price: 1.31,
-        fee: 24,
-        currency: "CNY",
-        note: "基金经理稳定，控制单只占比"
-      },
-      {
-        id: "tx-005",
-        date: "2026-03-08",
-        action: "buy",
-        symbol: "NVDA",
-        name: "NVIDIA",
-        type: "stock",
-        account: "美股账户",
-        quantity: 18,
-        price: 122.6,
-        fee: 1,
-        currency: "USD",
-        note: "AI 算力龙头，小仓位跟踪"
-      },
-      {
-        id: "tx-006",
-        date: "2026-04-19",
-        action: "sell",
-        symbol: "510300",
-        name: "沪深300ETF",
-        type: "etf",
-        account: "A股账户",
-        quantity: 1500,
-        price: 4.12,
-        fee: 4,
-        currency: "CNY",
-        note: "上涨后回收部分现金"
-      },
-      {
-        id: "tx-007",
-        date: "2026-05-26",
-        action: "dividend",
-        symbol: "AAPL",
-        name: "Apple",
-        type: "stock",
-        account: "美股账户",
-        quantity: 28,
-        price: 0.26,
-        fee: 0,
-        currency: "USD",
-        note: "季度分红"
-      }
-    ]
-  };
+  function createEmptyState() {
+    return {
+      prices: {},
+      dayChangePct: {},
+      watchlist: [],
+      transactions: []
+    };
+  }
 
   const els = {
     pageTitle: document.getElementById("pageTitle"),
@@ -259,9 +143,8 @@
       if (els.instrumentDrawer.classList.contains("open")) closeInstrumentDrawer();
       else closeDrawer();
     });
-    document.getElementById("resetButton").addEventListener("click", resetSample);
+    document.getElementById("resetButton").addEventListener("click", clearAllData);
     document.getElementById("exportCsvButton").addEventListener("click", exportCsv);
-    document.getElementById("fillSampleButton").addEventListener("click", fillSampleTransaction);
     els.form.addEventListener("submit", saveTransaction);
     document.getElementById("txSymbol").addEventListener("input", debounce(handleSymbolInput, 420));
     document.getElementById("txSymbol").addEventListener("blur", handleSymbolInput);
@@ -304,7 +187,7 @@
     } catch {
       // Ignore broken local data and fall back to the bundled sample.
     }
-    return JSON.parse(JSON.stringify(sampleState));
+    return createEmptyState();
   }
 
   function persist(options = {}) {
@@ -428,7 +311,7 @@
 
   function replaceState(nextState) {
     Object.keys(state).forEach((key) => delete state[key]);
-    Object.assign(state, JSON.parse(JSON.stringify(nextState || sampleState)));
+    Object.assign(state, JSON.parse(JSON.stringify(nextState || createEmptyState())));
   }
 
   function scheduleCloudSave(delay = 900) {
@@ -542,6 +425,7 @@
     if (!state.dayChangePct) state.dayChangePct = {};
     if (!Array.isArray(state.transactions)) state.transactions = [];
     let migrated = false;
+    if (removeDemoSeedData()) migrated = true;
     state.transactions.forEach((tx) => {
       if (!tx.status) {
         tx.status = "confirmed";
@@ -561,6 +445,29 @@
       }
     });
     if (migrated) persist();
+  }
+
+  function removeDemoSeedData() {
+    let changed = false;
+    const beforeTransactions = state.transactions.length;
+    state.transactions = state.transactions.filter((tx) => !demoSeedTransactionIds.has(tx.id));
+    if (state.transactions.length !== beforeTransactions) changed = true;
+
+    ["AAPL", "NVDA", "510300", "000001.OF"].forEach((symbol) => {
+      if (Object.hasOwn(state.prices, symbol)) {
+        delete state.prices[symbol];
+        changed = true;
+      }
+      if (Object.hasOwn(state.dayChangePct, symbol)) {
+        delete state.dayChangePct[symbol];
+        changed = true;
+      }
+    });
+
+    const beforeWatchlist = state.watchlist.length;
+    state.watchlist = state.watchlist.filter((item) => item.symbol !== "002611" || item.note !== "黄金基金观察");
+    if (state.watchlist.length !== beforeWatchlist) changed = true;
+    return changed;
   }
 
   function applyTheme(theme) {
@@ -1742,35 +1649,18 @@
     updateInputModeLabels();
   }
 
-  function fillSampleTransaction() {
-    document.getElementById("txDate").value = "2026-03-23";
-    document.getElementById("txTime").value = "20:28";
-    document.getElementById("txAction").value = "buy";
-    document.getElementById("txStatus").value = "confirmed";
-    document.getElementById("txSymbol").value = "002611";
-    document.getElementById("txName").value = "博时黄金ETF联接C";
-    document.getElementById("txType").value = "fund";
-    document.getElementById("txAccount").value = "基金账户";
-    document.getElementById("txInputMode").value = "amount";
-    document.getElementById("txQuantity").value = "2000";
-    document.getElementById("txPrice").value = "1";
-    document.getElementById("txFee").value = "0";
-    document.getElementById("txCurrency").value = "CNY";
-    document.getElementById("txNote").value = "示例：输入基金代码后自动匹配名称和净值曲线";
-    updateInputModeLabels();
-    handleSymbolInput();
-  }
-
-  function resetSample() {
+  function clearAllData() {
+    const confirmed = window.confirm("确认清空所有本地和云端资产数据？这个操作会保留同步口令，但会删除交易、自选和价格缓存。");
+    if (!confirmed) return;
     localStorage.removeItem(storageKey);
-    const next = JSON.parse(JSON.stringify(sampleState));
+    const next = createEmptyState();
     state.prices = next.prices;
     state.dayChangePct = next.dayChangePct;
     state.transactions = next.transactions;
-    state.watchlist = next.watchlist || [];
+    state.watchlist = next.watchlist;
     persist();
     render();
-    showToast("已恢复示例数据");
+    showToast("已清空数据");
   }
 
   function exportCsv() {

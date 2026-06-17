@@ -42,7 +42,7 @@
         <section class="side-panel">
           <p class="eyebrow">Data Mode</p>
           <h2>本地优先</h2>
-          <p>当前数据保存在这个浏览器里。后续可以接 Supabase 同步和 Cloudflare Worker 自动行情。</p>
+          <p>本地可用，输入同步口令后通过 Cloudflare D1 在设备之间同步。</p>
         </section>
 
         <section class="side-panel compact">
@@ -83,7 +83,7 @@
             <button class="ghost-button" id="exportCsvButton" type="button">导出 CSV</button>
             <button class="ghost-button" id="syncTokenButton" type="button">同步口令</button>
             <button class="ghost-button" id="syncNowButton" type="button">立即同步</button>
-            <button class="ghost-button" id="resetButton" type="button">重置示例</button>
+            <button class="ghost-button" id="resetButton" type="button">清空数据</button>
             <button class="ghost-button" id="openWatchlistButton" type="button">添加自选</button>
             <button class="primary-button" id="openTransactionButton" type="button">新增交易</button>
           </div>
@@ -326,7 +326,7 @@
           </label>
           <label>
             <span>代码</span>
-            <input id="txSymbol" name="symbol" type="text" placeholder="002611 / 510300 / AAPL" required />
+            <input id="txSymbol" name="symbol" type="text" placeholder="002611 / 基金名称 / 股票代码" required />
           </label>
           <label>
             <span>名称</span>
@@ -393,7 +393,6 @@
         </section>
 
         <div class="drawer-actions">
-          <button class="ghost-button" id="fillSampleButton" type="button">填入示例</button>
           <button class="primary-button" id="saveTransactionButton" type="submit">保存交易</button>
         </div>
       </form>
