@@ -59,6 +59,14 @@
             <span>隐私边界</span>
             <strong>只给自己</strong>
           </div>
+          <div class="sync-row">
+            <span>云同步</span>
+            <strong id="syncStatusText">未连接</strong>
+          </div>
+          <div class="sync-row">
+            <span>最近同步</span>
+            <strong id="syncLastText">--</strong>
+          </div>
         </section>
       </aside>
 
@@ -74,6 +82,7 @@
             </button>
             <button class="ghost-button" id="exportCsvButton" type="button">导出 CSV</button>
             <button class="ghost-button" id="syncTokenButton" type="button">同步口令</button>
+            <button class="ghost-button" id="syncNowButton" type="button">立即同步</button>
             <button class="ghost-button" id="resetButton" type="button">重置示例</button>
             <button class="ghost-button" id="openWatchlistButton" type="button">添加自选</button>
             <button class="primary-button" id="openTransactionButton" type="button">新增交易</button>

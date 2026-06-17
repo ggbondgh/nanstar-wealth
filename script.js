@@ -180,6 +180,8 @@
     recentTransactions: document.getElementById("recentTransactions"),
     riskList: document.getElementById("riskList"),
     noteList: document.getElementById("noteList"),
+    syncStatusText: document.getElementById("syncStatusText"),
+    syncLastText: document.getElementById("syncLastText"),
     transactionDrawerEyebrow: document.getElementById("transactionDrawerEyebrow"),
     transactionDrawerTitle: document.getElementById("transactionDrawerTitle"),
     saveTransactionButton: document.getElementById("saveTransactionButton"),
@@ -212,6 +214,7 @@
   let cloudSyncInFlight = false;
   let cloudSyncQueued = false;
   let cloudSyncNoticeShown = false;
+  let cloudSyncPoller = null;
   const lookupBySymbol = new Map();
 
   init();
@@ -249,6 +252,7 @@
     document.getElementById("openTransactionButton2").addEventListener("click", openDrawer);
     document.getElementById("openWatchlistButton").addEventListener("click", openWatchlistDrawer);
     document.getElementById("syncTokenButton").addEventListener("click", configureSyncToken);
+    document.getElementById("syncNowButton").addEventListener("click", () => syncCloudState({ forcePush: true }));
     document.getElementById("closeDrawerButton").addEventListener("click", closeDrawer);
     document.getElementById("closeInstrumentButton").addEventListener("click", closeInstrumentDrawer);
     els.backdrop.addEventListener("click", () => {
@@ -276,6 +280,9 @@
     els.transactionRecordList.addEventListener("click", handleTransactionAction);
     els.transactionFilters.addEventListener("click", handleTransactionFilterClick);
     els.instrumentTransactions.addEventListener("click", handleTransactionAction);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) syncCloudState();
+    });
 
     const today = new Date().toISOString().slice(0, 10);
     document.getElementById("txDate").value = today;
@@ -284,6 +291,7 @@
     updateInputModeLabels();
     render();
     syncCloudState().finally(() => refreshMarketData());
+    cloudSyncPoller = setInterval(() => syncCloudState(), 15000);
   }
 
   function loadState() {
@@ -348,8 +356,9 @@
     showToast("已清除同步口令");
   }
 
-  async function syncCloudState() {
+  async function syncCloudState(options = {}) {
     try {
+      updateSyncStatus("同步中");
       const response = await fetch("/api/state", { cache: "no-store", headers: cloudHeaders() });
       if (response.status === 401 || response.status === 403 || response.status === 503) return;
       if (!response.ok) throw new Error(`云端同步失败 ${response.status}`);
@@ -359,12 +368,22 @@
       const remoteUpdatedAt = data.updatedAt || "";
       const meta = getSyncMeta();
 
-      if (remoteState && (localStateSource !== "stored" || (!meta.dirty && remoteUpdatedAt && remoteUpdatedAt !== meta.remoteUpdatedAt))) {
-        replaceState(remoteState);
+      if (options.forcePush || (!remoteState && localStateSource === "stored")) {
+        await pushCloudState();
+        updateSyncStatus("已同步", remoteUpdatedAt || getSyncMeta().remoteUpdatedAt || "");
+        return;
+      }
+
+      if (remoteState && (!meta.remoteUpdatedAt || remoteUpdatedAt !== meta.remoteUpdatedAt || meta.dirty === false)) {
+        const merged = mergeCloudState(remoteState);
+        const changed = JSON.stringify(merged) !== JSON.stringify(remoteState);
+        replaceState(merged);
         ensureStateShape();
         persist({ sync: false });
         setSyncMeta({ ...getSyncMeta(), remoteUpdatedAt, dirty: false });
         render();
+        updateSyncStatus("已同步", remoteUpdatedAt);
+        if (changed || meta.dirty) scheduleCloudSave(0);
         if (!cloudSyncNoticeShown) {
           showToast("已从云端同步数据");
           cloudSyncNoticeShown = true;
@@ -372,12 +391,39 @@
         return;
       }
 
-      if (!remoteState && localStateSource === "stored") {
-        scheduleCloudSave(0);
-      }
+      updateSyncStatus(cloudSyncReady ? "已连接" : "未连接", remoteUpdatedAt || getSyncMeta().remoteUpdatedAt || "");
     } catch {
       // Keep local-first behavior when the cloud endpoint is unavailable.
+      updateSyncStatus("未连接");
     }
+  }
+
+  function mergeCloudState(remoteState) {
+    const merged = JSON.parse(JSON.stringify(state));
+    const remote = JSON.parse(JSON.stringify(remoteState || {}));
+    merged.prices = { ...(remote.prices || {}), ...(merged.prices || {}) };
+    merged.dayChangePct = { ...(remote.dayChangePct || {}), ...(merged.dayChangePct || {}) };
+    merged.watchlist = mergeBySymbol(remote.watchlist || [], merged.watchlist || []);
+    merged.transactions = mergeById(remote.transactions || [], merged.transactions || []);
+    return merged;
+  }
+
+  function mergeBySymbol(a, b) {
+    const map = new Map();
+    [...a, ...b].forEach((item) => {
+      if (!item?.symbol) return;
+      map.set(item.symbol, item);
+    });
+    return Array.from(map.values());
+  }
+
+  function mergeById(a, b) {
+    const map = new Map();
+    [...a, ...b].forEach((item) => {
+      if (!item?.id) return;
+      map.set(item.id, item);
+    });
+    return Array.from(map.values()).sort((left, right) => `${left.date || ""} ${left.time || ""}`.localeCompare(`${right.date || ""} ${right.time || ""}`));
   }
 
   function replaceState(nextState) {
@@ -407,6 +453,7 @@
       if (!response.ok) throw new Error(`云端保存失败 ${response.status}`);
       const data = await response.json();
       setSyncMeta({ ...getSyncMeta(), remoteUpdatedAt: data.updatedAt || "", dirty: false });
+      updateSyncStatus("已上传", data.updatedAt || "");
       if (!cloudSyncNoticeShown) {
         showToast("云端同步已开启");
         cloudSyncNoticeShown = true;
@@ -422,6 +469,17 @@
         scheduleCloudSave(500);
       }
     }
+  }
+
+  function updateSyncStatus(status, updatedAt = "") {
+    if (els.syncStatusText) els.syncStatusText.textContent = status || "未连接";
+    if (els.syncLastText) els.syncLastText.textContent = updatedAt ? formatSyncTime(updatedAt) : "--";
+  }
+
+  function formatSyncTime(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value || "--");
+    return date.toLocaleString("zh-CN", { hour12: false });
   }
 
   async function refreshMarketData() {
