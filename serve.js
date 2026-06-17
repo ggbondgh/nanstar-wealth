@@ -58,6 +58,20 @@ http
 
 async function handleApi(rawPath, searchParams, res) {
   const parts = rawPath.split("/").filter(Boolean);
+  if (parts[1] === "chart" && parts[2]) {
+    try {
+      const data = await getInstrumentChart(
+        parts[2],
+        searchParams.get("kind") || "",
+        searchParams.get("range") || "daily"
+      );
+      sendJson(res, 200, data);
+    } catch (error) {
+      sendJson(res, 502, { error: error.message || "Chart data unavailable" });
+    }
+    return;
+  }
+
   if (parts[1] === "instrument" && parts[2]) {
     try {
       const data = await getInstrumentProfile(
@@ -108,6 +122,20 @@ async function getInstrumentProfile(rawCode, kind = "", date = "", time = "") {
   }
 
   return getStockProfile(code);
+}
+
+async function getInstrumentChart(rawCode, kind = "", range = "daily") {
+  const code = String(rawCode || "").trim().toUpperCase();
+  const normalizedRange = normalizeChartRange(range);
+  if (!code) throw new Error("Invalid code");
+
+  const cacheKey = `chart:${kind || "auto"}:${code}:${normalizedRange}`;
+  const cached = apiCache.get(cacheKey);
+  if (cached && Date.now() - cached.createdAt < getChartCacheTtl(normalizedRange)) return cached.data;
+
+  const data = await fetchInstrumentChart(code, kind, normalizedRange);
+  apiCache.set(cacheKey, { createdAt: Date.now(), data });
+  return data;
 }
 
 async function searchInstruments(query) {
@@ -292,6 +320,155 @@ async function getStockProfile(code) {
   return data;
 }
 
+async function fetchInstrumentChart(code, kind, range) {
+  const profile = await getInstrumentProfile(code, kind).catch(() => null);
+  const fundOnly = kind === "fund" || (!kind && profile?.type === "fund");
+
+  if (!fundOnly) {
+    try {
+      if (range === "intraday") {
+        const intraday = await fetchEastmoneyIntraday(code);
+        return {
+          source: "eastmoney-trends",
+          code: intraday.code || profile?.code || code,
+          name: intraday.name || profile?.name || code,
+          type: kind === "etf" ? "etf" : profile?.type || "stock",
+          range,
+          chartType: "line",
+          currency: profile?.currency || "CNY",
+          stats: intraday.stats,
+          points: intraday.points
+        };
+      }
+
+      const candles = await fetchEastmoneyKline(code, range);
+      return {
+        source: "eastmoney-kline",
+        code: candles.code || profile?.code || code,
+        name: candles.name || profile?.name || code,
+        type: kind === "etf" ? "etf" : profile?.type || "stock",
+        range,
+        chartType: "candlestick",
+        currency: profile?.currency || "CNY",
+        stats: candles.stats,
+        points: candles.points
+      };
+    } catch (error) {
+      if (kind === "stock") throw error;
+    }
+  }
+
+  const fundProfile = profile || await getFundProfile(code);
+  const points = compressFundTrendForRange(fundProfile.trend || [], range);
+  return {
+    source: "eastmoney-fund-trend",
+    code: fundProfile.code || code,
+    name: fundProfile.name || code,
+    type: fundProfile.type || "fund",
+    range,
+    chartType: "line",
+    currency: fundProfile.currency || "CNY",
+    stats: {
+      latest: numberOrNull(fundProfile.nav),
+      changePct: numberOrNull(fundProfile.estimatedChangePct),
+      latestDate: fundProfile.navDate || (points.length ? points[points.length - 1].date : "")
+    },
+    points
+  };
+}
+
+async function fetchEastmoneyIntraday(code) {
+  const candidates = stockSecidCandidates(code);
+  for (const secid of candidates) {
+    const url = `https://push2.eastmoney.com/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11&fields2=f51,f52,f53,f54,f55,f56,f57,f58&iscr=0&iscca=0&ndays=1`;
+    const data = await fetchJsonFromUpstream(url).catch(() => null);
+    if (data?.rc === 0 && data.data?.trends?.length) return parseIntradayPayload(data.data);
+  }
+  throw new Error("Intraday chart not found");
+}
+
+async function fetchEastmoneyKline(code, range) {
+  const candidates = stockSecidCandidates(code);
+  const klt = range === "weekly" ? "102" : range === "monthly" ? "103" : "101";
+  const lmt = range === "monthly" ? 180 : range === "weekly" ? 220 : 260;
+  for (const secid of candidates) {
+    const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=${klt}&fqt=1&end=20500101&lmt=${lmt}`;
+    const data = await fetchJsonFromUpstream(url).catch(() => null);
+    if (data?.rc === 0 && data.data?.klines?.length) return parseKlinePayload(data.data);
+  }
+  throw new Error("K-line chart not found");
+}
+
+function parseIntradayPayload(payload) {
+  const points = (payload.trends || []).map((row) => {
+    const fields = String(row).split(",");
+    return {
+      time: fields[0] || "",
+      open: numberOrNull(fields[1]),
+      value: numberOrNull(fields[2]),
+      high: numberOrNull(fields[3]),
+      low: numberOrNull(fields[4]),
+      volume: numberOrNull(fields[5]),
+      amount: numberOrNull(fields[6]),
+      average: numberOrNull(fields[7])
+    };
+  }).filter((point) => Number.isFinite(point.value));
+
+  const latest = points.length ? points[points.length - 1] : null;
+  const first = points.length ? points[0] : null;
+  return {
+    code: payload.code || "",
+    name: payload.name || "",
+    points,
+    stats: {
+      latest: latest?.value ?? null,
+      open: first?.open ?? null,
+      high: maxNumber(points.map((point) => point.high)),
+      low: minNumber(points.map((point) => point.low)),
+      average: latest?.average ?? null,
+      volume: sumNumber(points.map((point) => point.volume)),
+      latestDate: latest?.time || ""
+    }
+  };
+}
+
+function parseKlinePayload(payload) {
+  const points = (payload.klines || []).map((row) => {
+    const fields = String(row).split(",");
+    return {
+      date: fields[0] || "",
+      open: numberOrNull(fields[1]),
+      close: numberOrNull(fields[2]),
+      high: numberOrNull(fields[3]),
+      low: numberOrNull(fields[4]),
+      volume: numberOrNull(fields[5]),
+      amount: numberOrNull(fields[6]),
+      amplitudePct: numberOrNull(fields[7]),
+      changePct: numberOrNull(fields[8]),
+      change: numberOrNull(fields[9]),
+      turnoverPct: numberOrNull(fields[10])
+    };
+  }).filter((point) => Number.isFinite(point.close) && Number.isFinite(point.high) && Number.isFinite(point.low));
+
+  const latest = points.length ? points[points.length - 1] : null;
+  return {
+    code: payload.code || "",
+    name: payload.name || "",
+    points,
+    stats: {
+      latest: latest?.close ?? null,
+      open: latest?.open ?? null,
+      high: latest?.high ?? null,
+      low: latest?.low ?? null,
+      volume: latest?.volume ?? null,
+      amount: latest?.amount ?? null,
+      change: latest?.change ?? null,
+      changePct: latest?.changePct ?? null,
+      latestDate: latest?.date || ""
+    }
+  };
+}
+
 async function fetchFundQuote(code) {
   const url = `https://fundgz.1234567.com.cn/js/${code}.js?rt=${Date.now()}`;
   const text = await fetchText(url);
@@ -400,6 +577,62 @@ function findTradeNav(trend, date, time = "") {
     else break;
   }
   return found;
+}
+
+function normalizeChartRange(range) {
+  if (["intraday", "daily", "weekly", "monthly"].includes(range)) return range;
+  return "daily";
+}
+
+function getChartCacheTtl(range) {
+  return range === "intraday" ? 20 * 1000 : 10 * 60 * 1000;
+}
+
+function compressFundTrendForRange(trend, range) {
+  if (!Array.isArray(trend) || !trend.length) return [];
+  if (range === "weekly") return compressByPeriod(trend, (date) => weekKey(date));
+  if (range === "monthly") return compressByPeriod(trend, (date) => String(date || "").slice(0, 7));
+  if (range === "intraday") return trend.slice(-120);
+  return trend.slice(-260);
+}
+
+function compressByPeriod(trend, getKey) {
+  const rows = [];
+  let currentKey = "";
+  for (const point of trend) {
+    const key = getKey(point.date);
+    if (!key) continue;
+    if (key !== currentKey) {
+      rows.push({ ...point });
+      currentKey = key;
+    } else {
+      rows[rows.length - 1] = { ...point };
+    }
+  }
+  return rows.slice(-260);
+}
+
+function weekKey(rawDate) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate || "")) return "";
+  const date = new Date(`${rawDate}T00:00:00`);
+  date.setDate(date.getDate() + 4 - (date.getDay() || 7));
+  const yearStart = new Date(`${date.getFullYear()}-01-01T00:00:00`);
+  const week = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+  return `${date.getFullYear()}-${String(week).padStart(2, "0")}`;
+}
+
+function maxNumber(values) {
+  const valid = values.filter(Number.isFinite);
+  return valid.length ? Math.max(...valid) : null;
+}
+
+function minNumber(values) {
+  const valid = values.filter(Number.isFinite);
+  return valid.length ? Math.min(...valid) : null;
+}
+
+function sumNumber(values) {
+  return values.reduce((sum, value) => Number.isFinite(value) ? sum + value : sum, 0);
 }
 
 function numberOrNull(value) {

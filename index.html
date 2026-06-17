@@ -410,12 +410,19 @@
       <div class="lookup-panel">
         <div class="lookup-head">
           <div>
-            <p class="eyebrow">Latest Curve</p>
-            <h3 id="instrumentChartTitle">净值曲线</h3>
+            <p class="eyebrow">Market Chart</p>
+            <h3 id="instrumentChartTitle">行情曲线</h3>
           </div>
           <span id="instrumentStatus">待查询</span>
         </div>
-        <canvas id="instrumentTrendChart" width="500" height="220" aria-label="标的曲线"></canvas>
+        <div class="chart-toolbar" id="instrumentChartRanges" aria-label="行情周期">
+          <button class="active" type="button" data-instrument-range="intraday">分时</button>
+          <button type="button" data-instrument-range="daily">日K</button>
+          <button type="button" data-instrument-range="weekly">周K</button>
+          <button type="button" data-instrument-range="monthly">月K</button>
+        </div>
+        <div class="chart-stats" id="instrumentChartStats"></div>
+        <canvas id="instrumentTrendChart" width="500" height="280" aria-label="标的行情图"></canvas>
       </div>
       <div class="panel inset-panel">
         <div class="panel-head">

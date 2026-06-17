@@ -32,6 +32,12 @@
     USD: 7.22,
     HKD: 0.92
   };
+  const instrumentRangeLabels = {
+    intraday: "分时",
+    daily: "日K",
+    weekly: "周K",
+    monthly: "月K"
+  };
 
   function createEmptyState() {
     return {
@@ -79,8 +85,11 @@
     instrumentTitle: document.getElementById("instrumentTitle"),
     instrumentSummary: document.getElementById("instrumentSummary"),
     instrumentStatus: document.getElementById("instrumentStatus"),
+    instrumentChartTitle: document.getElementById("instrumentChartTitle"),
+    instrumentChartStats: document.getElementById("instrumentChartStats"),
     instrumentTrendChart: document.getElementById("instrumentTrendChart"),
     instrumentTransactions: document.getElementById("instrumentTransactions"),
+    instrumentChartRanges: document.getElementById("instrumentChartRanges"),
     drawer: document.getElementById("transactionDrawer"),
     backdrop: document.getElementById("drawerBackdrop"),
     form: document.getElementById("transactionForm"),
@@ -100,6 +109,7 @@
   let cloudSyncNoticeShown = false;
   let cloudSyncPoller = null;
   const lookupBySymbol = new Map();
+  let activeInstrumentDetail = null;
 
   init();
 
@@ -139,6 +149,7 @@
     document.getElementById("syncNowButton").addEventListener("click", () => syncCloudState({ forcePush: true }));
     document.getElementById("closeDrawerButton").addEventListener("click", closeDrawer);
     document.getElementById("closeInstrumentButton").addEventListener("click", closeInstrumentDrawer);
+    els.instrumentChartRanges.addEventListener("click", handleInstrumentRangeClick);
     els.backdrop.addEventListener("click", () => {
       if (els.instrumentDrawer.classList.contains("open")) closeInstrumentDrawer();
       else closeDrawer();
@@ -1167,6 +1178,8 @@
   function closeInstrumentDrawer() {
     els.instrumentDrawer.classList.remove("open");
     els.instrumentDrawer.setAttribute("aria-hidden", "true");
+    activeInstrumentDetail = null;
+    els.instrumentStatus.textContent = "待查询";
     if (!els.drawer.classList.contains("open")) {
       setTimeout(() => {
         if (!els.instrumentDrawer.classList.contains("open") && !els.drawer.classList.contains("open")) els.backdrop.hidden = true;
@@ -1259,7 +1272,13 @@
     const holding = portfolio.holdings.find((item) => item.symbol === symbol)
       || getWatchOnlyRows(new Set()).find((item) => item.symbol === symbol)
       || { symbol, name: symbol, type, currency: "CNY", value: 0, pnl: 0, weight: 0, quantity: 0, price: 0 };
+    activeInstrumentDetail = {
+      symbol: holding.symbol,
+      type: holding.type || type,
+      name: holding.name || symbol
+    };
     els.instrumentTitle.textContent = `${holding.symbol} · ${holding.name}`;
+    els.instrumentChartTitle.textContent = `${instrumentRangeLabels.intraday}行情`;
     els.instrumentSummary.innerHTML = [
       { label: "市值", value: holding.value ? money(holding.value) : "自选关注" },
       { label: "持有份额", value: holding.quantity ? formatNumber(holding.quantity) : "--" },
@@ -1280,15 +1299,40 @@
     els.backdrop.hidden = false;
     els.instrumentDrawer.classList.add("open");
     els.instrumentDrawer.setAttribute("aria-hidden", "false");
+    setInstrumentRange("intraday");
+    await loadInstrumentChart("intraday");
+  }
 
+  function handleInstrumentRangeClick(event) {
+    const button = event.target.closest("button[data-instrument-range]");
+    if (!button || !activeInstrumentDetail) return;
+    const range = button.dataset.instrumentRange || "daily";
+    setInstrumentRange(range);
+    loadInstrumentChart(range);
+  }
+
+  function setInstrumentRange(range) {
+    document.querySelectorAll("#instrumentChartRanges button").forEach((item) => {
+      item.classList.toggle("active", item.dataset.instrumentRange === range);
+    });
+  }
+
+  async function loadInstrumentChart(range = "daily") {
+    if (!activeInstrumentDetail) return;
+    const { symbol, type, name } = activeInstrumentDetail;
+    const title = instrumentRangeLabels[range] || "行情";
+    els.instrumentChartTitle.textContent = `${title}曲线`;
+    els.instrumentStatus.textContent = "查询中";
     try {
-      const data = await fetchJson(`/api/instrument/${encodeURIComponent(symbol)}?kind=${encodeURIComponent(type)}`);
-      els.instrumentStatus.textContent = data.trend?.length ? "已更新" : "已匹配";
+      const data = await fetchJson(`/api/chart/${encodeURIComponent(symbol)}?kind=${encodeURIComponent(type)}&range=${encodeURIComponent(range)}`);
+      els.instrumentStatus.textContent = data.points?.length ? "已更新" : "暂无数据";
       if (data.name) els.instrumentTitle.textContent = `${data.code} · ${data.name}`;
-      drawLineChart(els.instrumentTrendChart, data.trend || [], { height: 220, emptyText: "该标的暂无曲线数据" });
+      renderInstrumentChartStats(data, range);
+      drawInstrumentChart(els.instrumentTrendChart, data, range, { emptyText: `${name} 暂无 ${title} 数据` });
     } catch (error) {
       els.instrumentStatus.textContent = "查询失败";
-      drawLineChart(els.instrumentTrendChart, [], { height: 220, emptyText: error.message || "查询失败" });
+      renderInstrumentChartStats(null, range, error.message || "查询失败");
+      drawInstrumentChart(els.instrumentTrendChart, { points: [], chartType: "line" }, range, { emptyText: error.message || "查询失败" });
     }
   }
 
@@ -1429,6 +1473,42 @@
     drawFundTrendChart(data.trend || []);
   }
 
+  function renderInstrumentChartStats(data, range, errorText = "") {
+    if (!els.instrumentChartStats) return;
+    if (errorText) {
+      els.instrumentChartStats.innerHTML = `<div class="lookup-stat"><span>状态</span><strong>${escapeHtml(errorText)}</strong></div>`;
+      return;
+    }
+    if (!data || !Array.isArray(data.points) || !data.points.length) {
+      els.instrumentChartStats.innerHTML = `<div class="lookup-stat"><span>状态</span><strong>暂无数据</strong></div>`;
+      return;
+    }
+    const latest = data.stats?.latest;
+    const open = data.stats?.open;
+    const high = data.stats?.high;
+    const low = data.stats?.low;
+    const changePct = data.stats?.changePct;
+    const change = Number.isFinite(data.stats?.change)
+      ? data.stats.change
+      : Number.isFinite(latest) && Number.isFinite(open)
+        ? latest - open
+        : null;
+    const stats = [
+      { label: "最新", value: Number.isFinite(latest) ? formatChartPrice(latest) : "--" },
+      { label: "涨跌", value: Number.isFinite(change) ? `${moneySigned(change)}${Number.isFinite(changePct) ? ` · ${percentSigned(changePct / 100)}` : ""}` : "--", signed: change },
+      { label: "最高", value: Number.isFinite(high) ? formatChartPrice(high) : "--" },
+      { label: "最低", value: Number.isFinite(low) ? formatChartPrice(low) : "--" }
+    ];
+    els.instrumentChartStats.innerHTML = stats
+      .map((stat) => `
+        <div class="lookup-stat">
+          <span>${escapeHtml(stat.label)}</span>
+          <strong>${stat.signed === undefined ? escapeHtml(stat.value) : colorText(stat.signed, escapeHtml(stat.value))}</strong>
+        </div>
+      `)
+      .join("");
+  }
+
   function showLookupPanel(status, title, stats) {
     els.lookupPanel.hidden = false;
     els.lookupStatus.textContent = status;
@@ -1532,6 +1612,213 @@
     ctx.textAlign = "right";
     ctx.fillText(points[points.length - 1].date.slice(5), cssWidth - padding.right, cssHeight - 6);
     ctx.textAlign = "left";
+  }
+
+  function drawInstrumentChart(canvas, payload, range, options = {}) {
+    if (!canvas) return;
+    const points = Array.isArray(payload?.points) ? payload.points : [];
+    const chartType = payload?.chartType || "line";
+    const title = instrumentRangeLabels[range] || "";
+    if (chartType === "candlestick") {
+      drawCandlestickChart(canvas, points, options);
+      return;
+    }
+    drawLineSeriesChart(canvas, points, {
+      ...options,
+      title,
+      showAverage: range === "intraday"
+    });
+  }
+
+  function drawLineSeriesChart(canvas, points, options = {}) {
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.max(360, Math.floor((rect.width || 500) * dpr));
+    const chartHeight = options.height || 280;
+    const height = Math.floor(chartHeight * dpr);
+    canvas.width = width;
+    canvas.height = height;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const cssWidth = width / dpr;
+    const cssHeight = height / dpr;
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+    const values = points.map((point) => number(point.value ?? point.close ?? point.open)).filter(Number.isFinite);
+    if (values.length < 2) {
+      ctx.fillStyle = getMutedColor();
+      ctx.font = "12px Segoe UI";
+      ctx.fillText(options.emptyText || "暂无曲线数据", 12, 28);
+      return;
+    }
+
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const padding = { top: 18, right: 14, bottom: 30, left: 54 };
+    const x = (index) => padding.left + (index / Math.max(points.length - 1, 1)) * (cssWidth - padding.left - padding.right);
+    const y = (value) => padding.top + (1 - (value - min) / (max - min || 1)) * (cssHeight - padding.top - padding.bottom);
+
+    drawChartGrid(ctx, cssWidth, cssHeight, padding);
+
+    const gradient = ctx.createLinearGradient(0, padding.top, 0, cssHeight - padding.bottom);
+    gradient.addColorStop(0, "rgba(52, 211, 153, 0.24)");
+    gradient.addColorStop(1, "rgba(52, 211, 153, 0)");
+
+    ctx.beginPath();
+    points.forEach((point, index) => {
+      const value = number(point.value ?? point.close ?? point.open);
+      const px = x(index);
+      const py = y(value);
+      if (index === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.lineTo(x(points.length - 1), cssHeight - padding.bottom);
+    ctx.lineTo(x(0), cssHeight - padding.bottom);
+    ctx.closePath();
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    ctx.beginPath();
+    points.forEach((point, index) => {
+      const value = number(point.value ?? point.close ?? point.open);
+      const px = x(index);
+      const py = y(value);
+      if (index === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.strokeStyle = "#34d399";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    if (options.showAverage) {
+      const avg = points.map((point) => number(point.average)).filter(Number.isFinite);
+      if (avg.length >= 2) {
+        ctx.beginPath();
+        avg.forEach((value, index) => {
+          const px = x(index);
+          const py = y(value);
+          if (index === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        });
+        ctx.strokeStyle = "rgba(249, 168, 37, 0.9)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    }
+
+    ctx.fillStyle = getMutedColor();
+    ctx.font = "11px Segoe UI";
+    ctx.fillText(formatChartPrice(max), 8, padding.top + 4);
+    ctx.fillText(formatChartPrice(min), 8, cssHeight - padding.bottom + 4);
+    ctx.fillText(formatChartLabel(points[0]), padding.left, cssHeight - 8);
+    ctx.textAlign = "right";
+    ctx.fillText(formatChartLabel(points[points.length - 1]), cssWidth - padding.right, cssHeight - 8);
+    ctx.textAlign = "left";
+  }
+
+  function drawCandlestickChart(canvas, points, options = {}) {
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.max(360, Math.floor((rect.width || 500) * dpr));
+    const chartHeight = options.height || 280;
+    const height = Math.floor(chartHeight * dpr);
+    canvas.width = width;
+    canvas.height = height;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const cssWidth = width / dpr;
+    const cssHeight = height / dpr;
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+    const candles = points.filter((point) => [point.open, point.close, point.high, point.low].every(Number.isFinite));
+    if (candles.length < 2) {
+      ctx.fillStyle = getMutedColor();
+      ctx.font = "12px Segoe UI";
+      ctx.fillText(options.emptyText || "暂无K线数据", 12, 28);
+      return;
+    }
+
+    const allValues = candles.flatMap((point) => [point.high, point.low, point.open, point.close]);
+    const min = Math.min(...allValues);
+    const max = Math.max(...allValues);
+    const padding = { top: 18, right: 14, bottom: 30, left: 54 };
+    const innerWidth = cssWidth - padding.left - padding.right;
+    const innerHeight = cssHeight - padding.top - padding.bottom;
+    const step = innerWidth / candles.length;
+    const bodyWidth = Math.max(2, Math.min(12, step * 0.58));
+    const x = (index) => padding.left + step * index + step / 2;
+    const y = (value) => padding.top + (1 - (value - min) / (max - min || 1)) * innerHeight;
+
+    drawChartGrid(ctx, cssWidth, cssHeight, padding);
+
+    candles.forEach((point, index) => {
+      const cx = x(index);
+      const openY = y(point.open);
+      const closeY = y(point.close);
+      const highY = y(point.high);
+      const lowY = y(point.low);
+      const rising = point.close >= point.open;
+      const color = rising ? "#ef4444" : "#22c55e";
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(cx, highY);
+      ctx.lineTo(cx, lowY);
+      ctx.stroke();
+      const top = Math.min(openY, closeY);
+      const bottom = Math.max(openY, closeY);
+      const bodyHeight = Math.max(1, bottom - top);
+      ctx.fillRect(cx - bodyWidth / 2, top, bodyWidth, bodyHeight);
+    });
+
+    ctx.fillStyle = getMutedColor();
+    ctx.font = "11px Segoe UI";
+    ctx.fillText(formatChartPrice(max), 8, padding.top + 4);
+    ctx.fillText(formatChartPrice(min), 8, cssHeight - padding.bottom + 4);
+    ctx.fillText(formatChartLabel(candles[0]), padding.left, cssHeight - 8);
+    ctx.textAlign = "right";
+    ctx.fillText(formatChartLabel(candles[candles.length - 1]), cssWidth - padding.right, cssHeight - 8);
+    ctx.textAlign = "left";
+  }
+
+  function drawChartGrid(ctx, cssWidth, cssHeight, padding) {
+    ctx.strokeStyle = getLineColor();
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 3; i += 1) {
+      const gy = padding.top + (i / 3) * (cssHeight - padding.top - padding.bottom);
+      ctx.beginPath();
+      ctx.moveTo(padding.left, gy);
+      ctx.lineTo(cssWidth - padding.right, gy);
+      ctx.stroke();
+    }
+  }
+
+  window.addEventListener("resize", debounce(() => {
+    if (activeInstrumentDetail) {
+      const activeRangeButton = document.querySelector("#instrumentChartRanges button.active");
+      const range = activeRangeButton?.dataset.instrumentRange || "intraday";
+      loadInstrumentChart(range);
+    }
+  }, 180));
+
+  function formatChartPrice(value) {
+    const num = number(value);
+    if (!Number.isFinite(num)) return "--";
+    if (Math.abs(num) >= 1000) return num.toFixed(0);
+    if (Math.abs(num) >= 100) return num.toFixed(2);
+    if (Math.abs(num) >= 10) return num.toFixed(2);
+    return num.toFixed(3);
+  }
+
+  function formatChartLabel(point) {
+    if (!point) return "";
+    if (point.time) return point.time.slice(11, 16) || point.time;
+    if (point.date) return point.date.slice(5);
+    return "";
   }
 
   async function fetchJson(url) {
