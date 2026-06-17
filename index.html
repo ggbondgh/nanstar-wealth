@@ -85,6 +85,7 @@
             <button class="ghost-button" id="syncNowButton" type="button">立即同步</button>
             <button class="ghost-button" id="resetButton" type="button">清空数据</button>
             <button class="ghost-button" id="openWatchlistButton" type="button">添加自选</button>
+            <button class="ghost-button" id="openImportButton" type="button">导入数据</button>
             <button class="primary-button" id="openTransactionButton" type="button">新增交易</button>
           </div>
         </header>
@@ -127,7 +128,7 @@
                 </div>
               </div>
               <div class="chart-frame">
-                <canvas id="wealthChart" width="920" height="320" aria-label="资产曲线图"></canvas>
+                <div id="wealthChart" class="chart-surface" aria-label="资产曲线图"></div>
               </div>
             </section>
 
@@ -284,6 +285,59 @@
     </div>
 
     <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+    <aside class="drawer import-drawer" id="importDrawer" aria-hidden="true" aria-label="数据导入">
+      <div class="drawer-head">
+        <div>
+          <p class="eyebrow">Import Center</p>
+          <h2>导入数据</h2>
+        </div>
+        <button class="icon-button" id="closeImportButton" type="button" aria-label="关闭" title="关闭">×</button>
+      </div>
+      <div class="import-grid">
+        <section class="panel inset-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">File Import</p>
+              <h3>Excel / CSV</h3>
+            </div>
+          </div>
+          <input id="importFileInput" type="file" accept=".xls,.xlsx,.csv" />
+          <div class="import-preview" id="importFilePreview">选择同花顺导出的文件后会显示解析预览。</div>
+          <div class="drawer-actions">
+            <button class="ghost-button" id="parseImportFileButton" type="button">解析文件</button>
+            <button class="primary-button" id="applyImportFileButton" type="button" disabled>导入文件</button>
+          </div>
+        </section>
+
+        <section class="panel inset-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Text Paste</p>
+              <h3>文本粘贴</h3>
+            </div>
+          </div>
+          <textarea id="importTextInput" rows="8" placeholder="粘贴同花顺导出的表格文本，或手工整理后的交易流水"></textarea>
+          <div class="drawer-actions">
+            <button class="ghost-button" id="parseImportTextButton" type="button">解析文本</button>
+            <button class="primary-button" id="applyImportTextButton" type="button" disabled>导入文本</button>
+          </div>
+        </section>
+
+        <section class="panel inset-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">OCR Notes</p>
+              <h3>截图 OCR</h3>
+            </div>
+          </div>
+          <p class="import-note">截图识别建议先转成表格文本，再粘贴进来；后面可以再接自动 OCR。</p>
+          <div class="drawer-actions">
+            <button class="ghost-button" id="ocrImportButton" type="button">预留 OCR</button>
+          </div>
+        </section>
+      </div>
+    </aside>
+
     <aside class="drawer" id="transactionDrawer" aria-hidden="true" aria-label="新增交易">
       <form id="transactionForm">
         <div class="drawer-head">
@@ -398,7 +452,7 @@
       </form>
     </aside>
 
-    <aside class="drawer detail-drawer" id="instrumentDrawer" aria-hidden="true" aria-label="标的详情">
+    <aside class="modal detail-modal" id="instrumentDrawer" aria-hidden="true" aria-label="标的详情">
       <div class="drawer-head">
         <div>
           <p class="eyebrow">Instrument Detail</p>
@@ -406,37 +460,41 @@
         </div>
         <button class="icon-button" id="closeInstrumentButton" type="button" aria-label="关闭" title="关闭">×</button>
       </div>
-      <div class="detail-summary" id="instrumentSummary"></div>
-      <div class="lookup-panel">
-        <div class="lookup-head">
-          <div>
-            <p class="eyebrow">Market Chart</p>
-            <h3 id="instrumentChartTitle">行情曲线</h3>
+      <div class="detail-shell">
+        <div class="detail-summary" id="instrumentSummary"></div>
+        <div class="lookup-panel detail-chart-panel">
+          <div class="lookup-head">
+            <div>
+              <p class="eyebrow">Market Chart</p>
+              <h3 id="instrumentChartTitle">行情曲线</h3>
+            </div>
+            <span id="instrumentStatus">待查询</span>
           </div>
-          <span id="instrumentStatus">待查询</span>
-        </div>
-        <div class="chart-toolbar" id="instrumentChartRanges" aria-label="行情周期">
-          <button class="active" type="button" data-instrument-range="intraday">分时</button>
-          <button type="button" data-instrument-range="daily">日K</button>
-          <button type="button" data-instrument-range="weekly">周K</button>
-          <button type="button" data-instrument-range="monthly">月K</button>
-        </div>
-        <div class="chart-stats" id="instrumentChartStats"></div>
-        <canvas id="instrumentTrendChart" width="500" height="280" aria-label="标的行情图"></canvas>
-      </div>
-      <div class="panel inset-panel">
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">Ledger</p>
-            <h3>相关交易</h3>
+          <div class="chart-toolbar" id="instrumentChartRanges" aria-label="行情周期">
+            <button class="active" type="button" data-instrument-range="intraday">分时</button>
+            <button type="button" data-instrument-range="daily">日K</button>
+            <button type="button" data-instrument-range="weekly">周K</button>
+            <button type="button" data-instrument-range="monthly">月K</button>
           </div>
+          <div class="chart-stats" id="instrumentChartStats"></div>
+          <div id="instrumentTrendChart" class="chart-surface large" aria-label="标的行情图"></div>
         </div>
-        <div class="activity-list" id="instrumentTransactions"></div>
+        <div class="panel inset-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Ledger</p>
+              <h3>相关交易</h3>
+            </div>
+          </div>
+          <div class="activity-list" id="instrumentTransactions"></div>
+        </div>
       </div>
     </aside>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+    <script src="./vendor/lightweight-charts.standalone.production.js"></script>
+    <script src="./vendor/xlsx.full.min.js"></script>
     <script src="./script.js"></script>
   </body>
 </html>

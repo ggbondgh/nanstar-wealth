@@ -38,6 +38,14 @@
     weekly: "周K",
     monthly: "月K"
   };
+  const chartColors = {
+    green: "#34d399",
+    red: "#fb7185",
+    blue: "#60a5fa",
+    amber: "#f59e0b",
+    grid: "rgba(148, 163, 184, 0.16)",
+    text: "#e2e8f0"
+  };
 
   function createEmptyState() {
     return {
@@ -110,6 +118,17 @@
   let cloudSyncPoller = null;
   const lookupBySymbol = new Map();
   let activeInstrumentDetail = null;
+  let wealthChartApi = null;
+  let wealthSeriesApi = null;
+  let instrumentChartApi = null;
+  let instrumentSeriesApi = null;
+  let instrumentAreaSeriesApi = null;
+  let instrumentCandlesSeriesApi = null;
+  let currentInstrumentChartType = null;
+  let currentInstrumentRange = "intraday";
+  let instrumentChartRequestId = 0;
+  let importPreviewData = null;
+  let importPreviewRows = [];
 
   init();
 
@@ -145,13 +164,28 @@
     document.getElementById("openTransactionButton").addEventListener("click", openDrawer);
     document.getElementById("openTransactionButton2").addEventListener("click", openDrawer);
     document.getElementById("openWatchlistButton").addEventListener("click", openWatchlistDrawer);
+    document.getElementById("openImportButton").addEventListener("click", openImportDrawer);
+    document.getElementById("closeImportButton").addEventListener("click", closeImportDrawer);
+    document.getElementById("parseImportFileButton").addEventListener("click", parseImportFile);
+    document.getElementById("applyImportFileButton").addEventListener("click", applyImportPreview);
+    document.getElementById("parseImportTextButton").addEventListener("click", parseImportText);
+    document.getElementById("applyImportTextButton").addEventListener("click", applyImportPreview);
+    document.getElementById("ocrImportButton").addEventListener("click", () => showToast("OCR 会在交易导入格式稳定后接入"));
     document.getElementById("syncTokenButton").addEventListener("click", configureSyncToken);
     document.getElementById("syncNowButton").addEventListener("click", () => syncCloudState({ forcePush: true }));
     document.getElementById("closeDrawerButton").addEventListener("click", closeDrawer);
     document.getElementById("closeInstrumentButton").addEventListener("click", closeInstrumentDrawer);
     els.instrumentChartRanges.addEventListener("click", handleInstrumentRangeClick);
+    els.instrumentChartRanges.querySelectorAll("button[data-instrument-range]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        changeInstrumentRange(button.dataset.instrumentRange || "daily");
+      });
+    });
     els.backdrop.addEventListener("click", () => {
       if (els.instrumentDrawer.classList.contains("open")) closeInstrumentDrawer();
+      else if (document.getElementById("importDrawer").classList.contains("open")) closeImportDrawer();
       else closeDrawer();
     });
     document.getElementById("resetButton").addEventListener("click", clearAllData);
@@ -186,6 +220,9 @@
     render();
     syncCloudState().finally(() => refreshMarketData());
     cloudSyncPoller = setInterval(() => syncCloudState(), 15000);
+    window.addEventListener("resize", debounce(() => {
+      resizeCharts();
+    }, 160));
   }
 
   function loadState() {
@@ -976,82 +1013,14 @@
   }
 
   function drawWealthChart(portfolio) {
-    const canvas = els.wealthChart;
-    const ctx = canvas.getContext("2d");
-    const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.max(640, Math.floor(rect.width * dpr));
-    canvas.height = Math.floor(320 * dpr);
-    ctx.scale(dpr, dpr);
-
-    const width = canvas.width / dpr;
-    const height = canvas.height / dpr;
-    const padding = { top: 18, right: 18, bottom: 32, left: 58 };
+    ensureWealthChart();
     const points = buildWealthSeries(portfolio, activeRange);
-    const values = points.map((point) => point.value);
-    const min = Math.min(...values) * 0.985;
-    const max = Math.max(...values) * 1.015;
-
-    ctx.clearRect(0, 0, width, height);
-    drawGrid(ctx, width, height, padding, min, max);
-
-    const x = (index) => padding.left + (index / (points.length - 1)) * (width - padding.left - padding.right);
-    const y = (value) => padding.top + (1 - (value - min) / (max - min || 1)) * (height - padding.top - padding.bottom);
-
-    const gradient = ctx.createLinearGradient(0, padding.top, 0, height - padding.bottom);
-    gradient.addColorStop(0, "rgba(52, 211, 153, 0.32)");
-    gradient.addColorStop(1, "rgba(52, 211, 153, 0)");
-
-    ctx.beginPath();
-    points.forEach((point, index) => {
-      const px = x(index);
-      const py = y(point.value);
-      if (index === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    });
-    ctx.lineTo(x(points.length - 1), height - padding.bottom);
-    ctx.lineTo(x(0), height - padding.bottom);
-    ctx.closePath();
-    ctx.fillStyle = gradient;
-    ctx.fill();
-
-    ctx.beginPath();
-    points.forEach((point, index) => {
-      const px = x(index);
-      const py = y(point.value);
-      if (index === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    });
-    ctx.strokeStyle = "#34d399";
-    ctx.lineWidth = 3;
-    ctx.stroke();
-
+    wealthSeriesApi.setData(points.map((point) => ({
+      time: point.time,
+      value: point.value
+    })));
     const last = points[points.length - 1];
-    ctx.fillStyle = getTextColor();
-    ctx.font = "700 13px Segoe UI";
-    ctx.fillText(`当前 ${money(last.value)}`, padding.left, padding.top + 12);
-    ctx.fillStyle = getMutedColor();
-    ctx.font = "12px Segoe UI";
-    ctx.fillText(points[0].date, padding.left, height - 10);
-    ctx.textAlign = "right";
-    ctx.fillText(last.date, width - padding.right, height - 10);
-    ctx.textAlign = "left";
-  }
-
-  function drawGrid(ctx, width, height, padding, min, max) {
-    ctx.strokeStyle = getLineColor();
-    ctx.lineWidth = 1;
-    ctx.fillStyle = getMutedColor();
-    ctx.font = "12px Segoe UI";
-    for (let i = 0; i <= 4; i += 1) {
-      const y = padding.top + (i / 4) * (height - padding.top - padding.bottom);
-      const value = max - (i / 4) * (max - min);
-      ctx.beginPath();
-      ctx.moveTo(padding.left, y);
-      ctx.lineTo(width - padding.right, y);
-      ctx.stroke();
-      ctx.fillText(shortMoney(value), 8, y + 4);
-    }
+    els.totalValue.dataset.current = String(last?.value || portfolio.totalValue || 0);
   }
 
   function buildWealthSeries(portfolio, range) {
@@ -1067,12 +1036,97 @@
       const slope = (progress - 1) * -0.07;
       const value = base * (1 + slope + wave);
       points.push({
+        time: date.toISOString().slice(0, 10),
         date: date.toISOString().slice(5, 10),
         value
       });
     }
     points[points.length - 1].value = base;
     return points;
+  }
+
+  function ensureWealthChart() {
+    if (!window.LightweightCharts || !els.wealthChart) return;
+    const size = getChartSize(els.wealthChart, 320);
+    if (!wealthChartApi) {
+      wealthChartApi = LightweightCharts.createChart(els.wealthChart, {
+        ...baseChartOptions(size.width, size.height),
+        localization: {
+          priceFormatter: (price) => shortMoney(price)
+        },
+        timeScale: {
+          borderVisible: false,
+          timeVisible: false,
+          secondsVisible: false,
+          rightOffset: 6,
+          barSpacing: 8
+        }
+      });
+      wealthSeriesApi = wealthChartApi.addSeries(LightweightCharts.AreaSeries, {
+        lineColor: chartColors.green,
+        topColor: "rgba(52, 211, 153, 0.28)",
+        bottomColor: "rgba(52, 211, 153, 0.02)",
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        priceFormat: {
+          type: "custom",
+          formatter: (price) => shortMoney(price)
+        }
+      });
+    }
+    wealthChartApi.applyOptions({
+      ...baseChartOptions(size.width, size.height),
+      localization: {
+        priceFormatter: (price) => shortMoney(price)
+      }
+    });
+  }
+
+  function baseChartOptions(width, height) {
+    return {
+      width,
+      height,
+      autoSize: false,
+      layout: {
+        background: { type: LightweightCharts.ColorType.Solid, color: "transparent" },
+        textColor: getMutedColor(),
+        fontSize: 12,
+        fontFamily: "Segoe UI, system-ui, sans-serif"
+      },
+      grid: {
+        vertLines: { color: chartColors.grid },
+        horzLines: { color: chartColors.grid }
+      },
+      crosshair: {
+        mode: LightweightCharts.CrosshairMode.Normal,
+        vertLine: { color: "rgba(226, 232, 240, 0.42)", width: 1, labelVisible: true },
+        horzLine: { color: "rgba(226, 232, 240, 0.42)", width: 1, labelVisible: true }
+      },
+      rightPriceScale: {
+        borderVisible: false,
+        scaleMargins: { top: 0.16, bottom: 0.14 }
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinch: true
+      }
+    };
+  }
+
+  function getChartSize(element, fallbackHeight) {
+    const rect = element.getBoundingClientRect();
+    return {
+      width: Math.max(320, Math.floor(rect.width || element.clientWidth || 640)),
+      height: Math.max(240, Math.floor(rect.height || fallbackHeight))
+    };
   }
 
   function drawAllocationChart(portfolio) {
@@ -1171,8 +1225,380 @@
     els.drawer.setAttribute("aria-hidden", "true");
     closeInstrumentDrawer();
     setTimeout(() => {
-      if (!els.drawer.classList.contains("open")) els.backdrop.hidden = true;
+      if (!els.drawer.classList.contains("open") && !document.getElementById("importDrawer").classList.contains("open")) els.backdrop.hidden = true;
     }, 180);
+  }
+
+  function openImportDrawer() {
+    closeInstrumentDrawer();
+    els.backdrop.hidden = false;
+    const drawer = document.getElementById("importDrawer");
+    drawer.classList.add("open");
+    drawer.setAttribute("aria-hidden", "false");
+  }
+
+  function closeImportDrawer() {
+    const drawer = document.getElementById("importDrawer");
+    drawer.classList.remove("open");
+    drawer.setAttribute("aria-hidden", "true");
+    setTimeout(() => {
+      if (!drawer.classList.contains("open") && !els.drawer.classList.contains("open") && !els.instrumentDrawer.classList.contains("open")) {
+        els.backdrop.hidden = true;
+      }
+    }, 180);
+  }
+
+  async function parseImportFile() {
+    const input = document.getElementById("importFileInput");
+    const file = input.files?.[0];
+    if (!file) {
+      showToast("先选择同花顺导出的 Excel 或 CSV 文件");
+      return;
+    }
+    if (!window.XLSX) {
+      showImportPreview([], "Excel 解析库未加载，请刷新页面后重试。");
+      return;
+    }
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array", cellDates: false });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
+      setImportPreview(rows, `文件：${file.name}`);
+    } catch (error) {
+      showImportPreview([], error.message || "文件解析失败");
+    }
+  }
+
+  function parseImportText() {
+    const text = document.getElementById("importTextInput").value.trim();
+    if (!text) {
+      showToast("先粘贴交易流水文本");
+      return;
+    }
+    setImportPreview(parseDelimitedText(text), "文本粘贴");
+  }
+
+  function setImportPreview(rows, sourceLabel) {
+    const normalizedRows = normalizeImportRows(rows);
+    const parsed = buildImportPreview(normalizedRows, sourceLabel);
+    importPreviewData = parsed;
+    importPreviewRows = parsed.rows;
+    showImportPreview(parsed.rows, parsed.message);
+  }
+
+  function parseDelimitedText(text) {
+    return text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        if (line.includes("\t")) return line.split("\t");
+        if (line.includes(",")) return splitCsvLine(line);
+        return line.split(/\s{2,}|\s(?=\d{6}\b)/).filter(Boolean);
+      });
+  }
+
+  function splitCsvLine(line) {
+    const cells = [];
+    let current = "";
+    let quoted = false;
+    for (let index = 0; index < line.length; index += 1) {
+      const char = line[index];
+      if (char === '"' && line[index + 1] === '"') {
+        current += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = !quoted;
+      } else if (char === "," && !quoted) {
+        cells.push(current);
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    cells.push(current);
+    return cells;
+  }
+
+  function normalizeImportRows(rows) {
+    return (rows || [])
+      .map((row) => Array.from(row || []).map((cell) => String(cell ?? "").trim()))
+      .filter((row) => row.some(Boolean));
+  }
+
+  function buildImportPreview(rows, sourceLabel = "导入数据") {
+    if (!rows.length) return { rows: [], message: "没有识别到可用表格行。" };
+    const headerIndex = findImportHeaderIndex(rows);
+    const headers = rows[headerIndex] || [];
+    const fieldMap = mapImportHeaders(headers);
+    const dataRows = rows.slice(headerIndex + 1);
+    const previewRows = dataRows
+      .map((row, index) => parseImportRow(row, headers, fieldMap, index))
+      .filter(Boolean);
+    const validCount = previewRows.filter((row) => row.valid).length;
+    return {
+      rows: previewRows,
+      message: `${sourceLabel} · 识别 ${previewRows.length} 行，可导入 ${validCount} 行`
+    };
+  }
+
+  function findImportHeaderIndex(rows) {
+    let bestIndex = 0;
+    let bestScore = -1;
+    rows.slice(0, 12).forEach((row, index) => {
+      const text = row.join("|");
+      const score = [
+        /日期|时间/.test(text),
+        /代码|证券/.test(text),
+        /名称/.test(text),
+        /买卖|业务|操作/.test(text),
+        /成交|发生|金额|价格|数量/.test(text)
+      ].filter(Boolean).length;
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    });
+    return bestIndex;
+  }
+
+  function mapImportHeaders(headers) {
+    const normalized = headers.map(normalizeHeader);
+    const pick = (...patterns) => normalized.findIndex((header) => patterns.some((pattern) => pattern.test(header)));
+    return {
+      date: pick(/成交日期|交易日期|发生日期|日期/),
+      time: pick(/成交时间|委托时间|时间/),
+      symbol: pick(/证券代码|基金代码|代码|产品代码/),
+      name: pick(/证券名称|基金名称|名称|产品名称/),
+      action: pick(/买卖标志|买卖方向|操作|业务名称|业务类型|摘要/),
+      price: pick(/成交价格|成交价|价格|净值/),
+      quantity: pick(/成交数量|成交份额|发生数量|数量|份额/),
+      amount: pick(/成交金额|发生金额|清算金额|金额|本金/),
+      fee: pick(/手续费|佣金|费用|规费|过户费/),
+      account: pick(/账户|股东账户|资金账号/)
+    };
+  }
+
+  function parseImportRow(row, headers, fieldMap, index) {
+    const cell = (field) => {
+      const headerIndex = fieldMap[field];
+      return headerIndex >= 0 ? String(row[headerIndex] ?? "").trim() : "";
+    };
+    const fallback = buildImportFallback(row);
+    const symbol = normalizeSymbol(cell("symbol") || fallback.symbol);
+    const name = cell("name") || fallback.name || symbol;
+    const date = normalizeImportDate(cell("date") || fallback.date);
+    const time = normalizeImportTime(cell("time") || fallback.time);
+    const action = normalizeImportAction(cell("action") || fallback.action);
+    const price = parseImportNumber(cell("price") || fallback.price);
+    const amount = parseImportNumber(cell("amount") || fallback.amount);
+    const quantity = parseImportNumber(cell("quantity") || fallback.quantity);
+    const fee = parseImportNumber(cell("fee") || "0");
+    const type = inferInstrumentType(symbol, name);
+    const derivedPrice = price > 0 ? price : (amount > 0 && quantity > 0 ? amount / quantity : 0);
+    const inputMode = amount > 0 ? "amount" : "shares";
+    const txQuantity = amount > 0 ? amount : quantity;
+    const txPrice = derivedPrice > 0 ? derivedPrice : 1;
+    const reasons = [];
+    if (!date) reasons.push("缺少日期");
+    if (!symbol) reasons.push("缺少代码");
+    if (!action) reasons.push("缺少买卖方向");
+    if (!txQuantity) reasons.push("缺少金额或数量");
+    if (inputMode === "shares" && !derivedPrice) reasons.push("缺少价格");
+    if ((action === "buy" || action === "sell") && type === "stock" && !derivedPrice) reasons.push("股票交易缺少成交价");
+    const tx = {
+      id: "",
+      date,
+      time,
+      action: action || "buy",
+      status: "confirmed",
+      symbol,
+      name,
+      type,
+      account: cell("account") || "同花顺导入",
+      inputMode,
+      quantity: txQuantity,
+      price: txPrice,
+      fee,
+      currency: "CNY",
+      note: "同花顺/券商流水导入"
+    };
+    tx.id = `import-${hashString(transactionSignature(tx))}`;
+    return {
+      rowIndex: index + 1,
+      raw: row,
+      tx,
+      valid: reasons.length === 0,
+      reason: reasons.join("；")
+    };
+  }
+
+  function buildImportFallback(row) {
+    const joined = row.join(" ");
+    const date = row.find((cell) => normalizeImportDate(cell)) || "";
+    const time = row.find((cell) => normalizeImportTime(cell)) || "";
+    const symbol = (joined.match(/\b\d{6}\b/) || [])[0] || "";
+    const action = row.find((cell) => normalizeImportAction(cell)) || "";
+    const numbers = row.map(parseImportNumber).filter((value) => value > 0);
+    return {
+      date,
+      time,
+      symbol,
+      name: "",
+      action,
+      price: numbers.find((value) => value > 0 && value < 10000) || 0,
+      quantity: numbers.find((value) => value >= 100) || 0,
+      amount: numbers.find((value) => value >= 1000) || 0
+    };
+  }
+
+  function normalizeHeader(value) {
+    return String(value || "").replace(/\s+/g, "").replace(/[()（）:：]/g, "");
+  }
+
+  function normalizeImportDate(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const compact = text.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if (compact) return `${compact[1]}-${compact[2]}-${compact[3]}`;
+    const matched = text.match(/(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
+    if (!matched) return "";
+    return `${matched[1]}-${matched[2].padStart(2, "0")}-${matched[3].padStart(2, "0")}`;
+  }
+
+  function normalizeImportTime(value) {
+    const text = String(value || "").trim();
+    const matched = text.match(/(\d{1,2})[:：](\d{2})/);
+    if (!matched) return "";
+    return `${matched[1].padStart(2, "0")}:${matched[2]}`;
+  }
+
+  function normalizeImportAction(value) {
+    const text = String(value || "").trim();
+    if (/申购|认购|买入|买|定投/.test(text)) return "buy";
+    if (/赎回|卖出|卖/.test(text)) return "sell";
+    if (/分红|红利/.test(text)) return "dividend";
+    if (/转入|入金|存入/.test(text)) return "deposit";
+    if (/转出|出金|取出/.test(text)) return "withdraw";
+    return "";
+  }
+
+  function parseImportNumber(value) {
+    const text = String(value ?? "").replace(/,/g, "").replace(/[￥¥元份股]/g, "").trim();
+    const matched = text.match(/-?\d+(?:\.\d+)?/);
+    if (!matched) return 0;
+    const parsed = Number(matched[0]);
+    return Number.isFinite(parsed) ? Math.abs(parsed) : 0;
+  }
+
+  function inferInstrumentType(symbol, name = "") {
+    const text = `${symbol} ${name}`;
+    if (/ETF|LOF|510|159|588|512/.test(text)) return "etf";
+    if (/基金|混合|债券|货币|指数|QDII|FOF/.test(text)) return "fund";
+    return /^\d{6}$/.test(symbol) ? "stock" : "fund";
+  }
+
+  function showImportPreview(rows, message = "") {
+    const preview = document.getElementById("importFilePreview");
+    const validRows = rows.filter((row) => row.valid);
+    document.getElementById("applyImportFileButton").disabled = !validRows.length;
+    document.getElementById("applyImportTextButton").disabled = !validRows.length;
+    if (!rows.length) {
+      preview.innerHTML = `<div class="import-empty">${escapeHtml(message || "暂无预览")}</div>`;
+      return;
+    }
+    preview.innerHTML = `
+      <div class="import-preview-head">
+        <strong>${escapeHtml(message)}</strong>
+        <span>${validRows.length}/${rows.length} 可导入</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>状态</th>
+            <th>日期</th>
+            <th>动作</th>
+            <th>代码</th>
+            <th>名称</th>
+            <th>金额/份额</th>
+            <th>价格</th>
+            <th>原因</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.slice(0, 80).map((row) => `
+            <tr>
+              <td><span class="status-pill ${row.valid ? "confirmed" : "failed"}">${row.valid ? "可导入" : "跳过"}</span></td>
+              <td>${escapeHtml(row.tx.date || "--")}</td>
+              <td>${escapeHtml(actionNames[row.tx.action] || row.tx.action || "--")}</td>
+              <td>${escapeHtml(row.tx.symbol || "--")}</td>
+              <td>${escapeHtml(row.tx.name || "--")}</td>
+              <td>${escapeHtml(row.tx.inputMode === "amount" ? money(row.tx.quantity, row.tx.currency) : formatNumber(row.tx.quantity))}</td>
+              <td>${escapeHtml(formatChartPrice(row.tx.price))}</td>
+              <td>${escapeHtml(row.reason || "--")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+      ${rows.length > 80 ? `<p class="import-note">仅预览前 80 行，确认后会导入全部可识别行。</p>` : ""}
+    `;
+  }
+
+  async function applyImportPreview() {
+    const rows = importPreviewRows.filter((row) => row.valid).map((row) => ({ ...row.tx }));
+    if (!rows.length) {
+      showToast("没有可导入的交易行");
+      return;
+    }
+    const existing = new Set(state.transactions.map(transactionSignature));
+    let imported = 0;
+    let skipped = 0;
+    for (const tx of rows) {
+      const signature = transactionSignature(tx);
+      if (existing.has(signature)) {
+        skipped += 1;
+        continue;
+      }
+      await hydrateTransactionPrice(tx);
+      state.transactions.push(tx);
+      existing.add(signature);
+      if (tx.symbol && tx.price > 0) state.prices[tx.symbol] = tx.price;
+      imported += 1;
+    }
+    if (!imported) {
+      showToast(`没有新增流水，已跳过 ${skipped} 条重复记录`);
+      return;
+    }
+    persist();
+    render();
+    closeImportDrawer();
+    refreshMarketData();
+    showToast(`已导入 ${imported} 条交易流水${skipped ? `，跳过 ${skipped} 条重复` : ""}`);
+  }
+
+  function transactionSignature(tx) {
+    return [
+      tx.date || "",
+      tx.time || "",
+      tx.action || "",
+      normalizeSymbol(tx.symbol || ""),
+      tx.inputMode || "",
+      number(tx.quantity).toFixed(4),
+      number(tx.price).toFixed(4),
+      number(tx.fee).toFixed(2)
+    ].join("|");
+  }
+
+  function hashString(value) {
+    let hash = 2166136261;
+    const text = String(value || "");
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
   }
 
   function closeInstrumentDrawer() {
@@ -1182,7 +1608,7 @@
     els.instrumentStatus.textContent = "待查询";
     if (!els.drawer.classList.contains("open")) {
       setTimeout(() => {
-        if (!els.instrumentDrawer.classList.contains("open") && !els.drawer.classList.contains("open")) els.backdrop.hidden = true;
+        if (!els.instrumentDrawer.classList.contains("open") && !els.drawer.classList.contains("open") && !document.getElementById("importDrawer").classList.contains("open")) els.backdrop.hidden = true;
       }, 180);
     }
   }
@@ -1306,12 +1732,18 @@
   function handleInstrumentRangeClick(event) {
     const button = event.target.closest("button[data-instrument-range]");
     if (!button || !activeInstrumentDetail) return;
-    const range = button.dataset.instrumentRange || "daily";
+    event.preventDefault();
+    changeInstrumentRange(button.dataset.instrumentRange || "daily");
+  }
+
+  function changeInstrumentRange(range) {
+    if (!activeInstrumentDetail) return;
     setInstrumentRange(range);
     loadInstrumentChart(range);
   }
 
   function setInstrumentRange(range) {
+    currentInstrumentRange = range;
     document.querySelectorAll("#instrumentChartRanges button").forEach((item) => {
       item.classList.toggle("active", item.dataset.instrumentRange === range);
     });
@@ -1319,20 +1751,23 @@
 
   async function loadInstrumentChart(range = "daily") {
     if (!activeInstrumentDetail) return;
+    const requestId = ++instrumentChartRequestId;
     const { symbol, type, name } = activeInstrumentDetail;
     const title = instrumentRangeLabels[range] || "行情";
     els.instrumentChartTitle.textContent = `${title}曲线`;
     els.instrumentStatus.textContent = "查询中";
     try {
       const data = await fetchJson(`/api/chart/${encodeURIComponent(symbol)}?kind=${encodeURIComponent(type)}&range=${encodeURIComponent(range)}`);
+      if (requestId !== instrumentChartRequestId) return;
       els.instrumentStatus.textContent = data.points?.length ? "已更新" : "暂无数据";
       if (data.name) els.instrumentTitle.textContent = `${data.code} · ${data.name}`;
       renderInstrumentChartStats(data, range);
-      drawInstrumentChart(els.instrumentTrendChart, data, range, { emptyText: `${name} 暂无 ${title} 数据` });
+      renderInstrumentChart(els.instrumentTrendChart, data, range, { emptyText: `${name} 暂无 ${title} 数据` });
     } catch (error) {
+      if (requestId !== instrumentChartRequestId) return;
       els.instrumentStatus.textContent = "查询失败";
       renderInstrumentChartStats(null, range, error.message || "查询失败");
-      drawInstrumentChart(els.instrumentTrendChart, { points: [], chartType: "line" }, range, { emptyText: error.message || "查询失败" });
+      renderInstrumentChart(els.instrumentTrendChart, { points: [], chartType: "line" }, range, { emptyText: error.message || "查询失败" });
     }
   }
 
@@ -1614,196 +2049,152 @@
     ctx.textAlign = "left";
   }
 
-  function drawInstrumentChart(canvas, payload, range, options = {}) {
-    if (!canvas) return;
+  function renderInstrumentChart(container, payload, range, options = {}) {
+    if (!container || !window.LightweightCharts) return;
     const points = Array.isArray(payload?.points) ? payload.points : [];
     const chartType = payload?.chartType || "line";
-    const title = instrumentRangeLabels[range] || "";
-    if (chartType === "candlestick") {
-      drawCandlestickChart(canvas, points, options);
-      return;
-    }
-    drawLineSeriesChart(canvas, points, {
-      ...options,
-      title,
-      showAverage: range === "intraday"
-    });
-  }
+    const size = getChartSize(container, 480);
+    const desiredType = chartType === "candlestick" ? "candlestick" : "line";
 
-  function drawLineSeriesChart(canvas, points, options = {}) {
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const width = Math.max(360, Math.floor((rect.width || 500) * dpr));
-    const chartHeight = options.height || 280;
-    const height = Math.floor(chartHeight * dpr);
-    canvas.width = width;
-    canvas.height = height;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    clearChartEmpty(container);
 
-    const cssWidth = width / dpr;
-    const cssHeight = height / dpr;
-    ctx.clearRect(0, 0, cssWidth, cssHeight);
-
-    const values = points.map((point) => number(point.value ?? point.close ?? point.open)).filter(Number.isFinite);
-    if (values.length < 2) {
-      ctx.fillStyle = getMutedColor();
-      ctx.font = "12px Segoe UI";
-      ctx.fillText(options.emptyText || "暂无曲线数据", 12, 28);
-      return;
+    if (instrumentChartApi && currentInstrumentChartType && currentInstrumentChartType !== desiredType) {
+      resetInstrumentChart();
     }
 
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const padding = { top: 18, right: 14, bottom: 30, left: 54 };
-    const x = (index) => padding.left + (index / Math.max(points.length - 1, 1)) * (cssWidth - padding.left - padding.right);
-    const y = (value) => padding.top + (1 - (value - min) / (max - min || 1)) * (cssHeight - padding.top - padding.bottom);
+    if (!instrumentChartApi) {
+      instrumentChartApi = LightweightCharts.createChart(container, {
+        ...baseChartOptions(size.width, size.height),
+        timeScale: {
+          borderVisible: false,
+          timeVisible: range === "intraday",
+          secondsVisible: false,
+          rightOffset: 8,
+          barSpacing: range === "intraday" ? 4 : 8
+        },
+        localization: {
+          priceFormatter: (price) => formatChartPrice(price)
+        }
+      });
+    } else {
+      instrumentChartApi.applyOptions({
+        ...baseChartOptions(size.width, size.height),
+        timeScale: {
+          borderVisible: false,
+          timeVisible: range === "intraday",
+          secondsVisible: false,
+          rightOffset: 8,
+          barSpacing: range === "intraday" ? 4 : 8
+        },
+        localization: {
+          priceFormatter: (price) => formatChartPrice(price)
+        }
+      });
+    }
 
-    drawChartGrid(ctx, cssWidth, cssHeight, padding);
+    currentInstrumentChartType = desiredType;
+    if (!points.length) {
+      showChartEmpty(container, options.emptyText || "暂无图表数据");
+      return;
+    }
 
-    const gradient = ctx.createLinearGradient(0, padding.top, 0, cssHeight - padding.bottom);
-    gradient.addColorStop(0, "rgba(52, 211, 153, 0.24)");
-    gradient.addColorStop(1, "rgba(52, 211, 153, 0)");
-
-    ctx.beginPath();
-    points.forEach((point, index) => {
-      const value = number(point.value ?? point.close ?? point.open);
-      const px = x(index);
-      const py = y(value);
-      if (index === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    });
-    ctx.lineTo(x(points.length - 1), cssHeight - padding.bottom);
-    ctx.lineTo(x(0), cssHeight - padding.bottom);
-    ctx.closePath();
-    ctx.fillStyle = gradient;
-    ctx.fill();
-
-    ctx.beginPath();
-    points.forEach((point, index) => {
-      const value = number(point.value ?? point.close ?? point.open);
-      const px = x(index);
-      const py = y(value);
-      if (index === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    });
-    ctx.strokeStyle = "#34d399";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    if (options.showAverage) {
-      const avg = points.map((point) => number(point.average)).filter(Number.isFinite);
-      if (avg.length >= 2) {
-        ctx.beginPath();
-        avg.forEach((value, index) => {
-          const px = x(index);
-          const py = y(value);
-          if (index === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        });
-        ctx.strokeStyle = "rgba(249, 168, 37, 0.9)";
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
+    if (desiredType === "candlestick") {
+      const candleData = points
+        .filter((point) => [point.open, point.high, point.low, point.close].every(Number.isFinite))
+        .map((point) => ({
+          time: normalizeChartTime(point.date || point.time),
+          open: point.open,
+          high: point.high,
+          low: point.low,
+          close: point.close
+        }));
+      if (!candleData.length) {
+        showChartEmpty(container, options.emptyText || "暂无 K 线数据");
+        return;
       }
+      if (!instrumentCandlesSeriesApi) {
+        instrumentCandlesSeriesApi = instrumentChartApi.addSeries(LightweightCharts.CandlestickSeries, {
+          upColor: "#ef4444",
+          downColor: "#22c55e",
+          wickUpColor: "#ef4444",
+          wickDownColor: "#22c55e",
+          borderVisible: false,
+          priceFormat: { type: "price", precision: 3, minMove: 0.001 }
+        });
+        instrumentSeriesApi = instrumentCandlesSeriesApi;
+      }
+      instrumentCandlesSeriesApi.setData(candleData);
+    } else {
+      const lineData = points
+        .map((point) => ({
+          time: normalizeChartTime(point.time || point.date),
+          value: number(point.value ?? point.close ?? point.open)
+        }))
+        .filter((point) => point.time && Number.isFinite(point.value));
+      if (!lineData.length) {
+        showChartEmpty(container, options.emptyText || "暂无曲线数据");
+        return;
+      }
+      if (!instrumentAreaSeriesApi) {
+        instrumentAreaSeriesApi = instrumentChartApi.addSeries(LightweightCharts.AreaSeries, {
+          lineColor: chartColors.green,
+          topColor: "rgba(52, 211, 153, 0.24)",
+          bottomColor: "rgba(52, 211, 153, 0.02)",
+          lineWidth: 2,
+          priceLineVisible: false,
+          priceFormat: { type: "price", precision: 3, minMove: 0.001 }
+        });
+        instrumentSeriesApi = instrumentAreaSeriesApi;
+      }
+      instrumentAreaSeriesApi.setData(lineData);
     }
 
-    ctx.fillStyle = getMutedColor();
-    ctx.font = "11px Segoe UI";
-    ctx.fillText(formatChartPrice(max), 8, padding.top + 4);
-    ctx.fillText(formatChartPrice(min), 8, cssHeight - padding.bottom + 4);
-    ctx.fillText(formatChartLabel(points[0]), padding.left, cssHeight - 8);
-    ctx.textAlign = "right";
-    ctx.fillText(formatChartLabel(points[points.length - 1]), cssWidth - padding.right, cssHeight - 8);
-    ctx.textAlign = "left";
+    instrumentChartApi.timeScale().fitContent();
+    currentInstrumentRange = range;
   }
 
-  function drawCandlestickChart(canvas, points, options = {}) {
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const width = Math.max(360, Math.floor((rect.width || 500) * dpr));
-    const chartHeight = options.height || 280;
-    const height = Math.floor(chartHeight * dpr);
-    canvas.width = width;
-    canvas.height = height;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    const cssWidth = width / dpr;
-    const cssHeight = height / dpr;
-    ctx.clearRect(0, 0, cssWidth, cssHeight);
-
-    const candles = points.filter((point) => [point.open, point.close, point.high, point.low].every(Number.isFinite));
-    if (candles.length < 2) {
-      ctx.fillStyle = getMutedColor();
-      ctx.font = "12px Segoe UI";
-      ctx.fillText(options.emptyText || "暂无K线数据", 12, 28);
-      return;
-    }
-
-    const allValues = candles.flatMap((point) => [point.high, point.low, point.open, point.close]);
-    const min = Math.min(...allValues);
-    const max = Math.max(...allValues);
-    const padding = { top: 18, right: 14, bottom: 30, left: 54 };
-    const innerWidth = cssWidth - padding.left - padding.right;
-    const innerHeight = cssHeight - padding.top - padding.bottom;
-    const step = innerWidth / candles.length;
-    const bodyWidth = Math.max(2, Math.min(12, step * 0.58));
-    const x = (index) => padding.left + step * index + step / 2;
-    const y = (value) => padding.top + (1 - (value - min) / (max - min || 1)) * innerHeight;
-
-    drawChartGrid(ctx, cssWidth, cssHeight, padding);
-
-    candles.forEach((point, index) => {
-      const cx = x(index);
-      const openY = y(point.open);
-      const closeY = y(point.close);
-      const highY = y(point.high);
-      const lowY = y(point.low);
-      const rising = point.close >= point.open;
-      const color = rising ? "#ef4444" : "#22c55e";
-      ctx.strokeStyle = color;
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.moveTo(cx, highY);
-      ctx.lineTo(cx, lowY);
-      ctx.stroke();
-      const top = Math.min(openY, closeY);
-      const bottom = Math.max(openY, closeY);
-      const bodyHeight = Math.max(1, bottom - top);
-      ctx.fillRect(cx - bodyWidth / 2, top, bodyWidth, bodyHeight);
-    });
-
-    ctx.fillStyle = getMutedColor();
-    ctx.font = "11px Segoe UI";
-    ctx.fillText(formatChartPrice(max), 8, padding.top + 4);
-    ctx.fillText(formatChartPrice(min), 8, cssHeight - padding.bottom + 4);
-    ctx.fillText(formatChartLabel(candles[0]), padding.left, cssHeight - 8);
-    ctx.textAlign = "right";
-    ctx.fillText(formatChartLabel(candles[candles.length - 1]), cssWidth - padding.right, cssHeight - 8);
-    ctx.textAlign = "left";
+  function resetInstrumentChart() {
+    if (instrumentChartApi) instrumentChartApi.remove();
+    instrumentChartApi = null;
+    instrumentSeriesApi = null;
+    instrumentAreaSeriesApi = null;
+    instrumentCandlesSeriesApi = null;
+    currentInstrumentChartType = null;
   }
 
-  function drawChartGrid(ctx, cssWidth, cssHeight, padding) {
-    ctx.strokeStyle = getLineColor();
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= 3; i += 1) {
-      const gy = padding.top + (i / 3) * (cssHeight - padding.top - padding.bottom);
-      ctx.beginPath();
-      ctx.moveTo(padding.left, gy);
-      ctx.lineTo(cssWidth - padding.right, gy);
-      ctx.stroke();
-    }
+  function showChartEmpty(container, message) {
+    resetInstrumentChart();
+    container.innerHTML = `<div class="chart-empty">${escapeHtml(message)}</div>`;
   }
 
-  window.addEventListener("resize", debounce(() => {
-    if (activeInstrumentDetail) {
-      const activeRangeButton = document.querySelector("#instrumentChartRanges button.active");
-      const range = activeRangeButton?.dataset.instrumentRange || "intraday";
-      loadInstrumentChart(range);
+  function clearChartEmpty(container) {
+    const empty = container.querySelector(".chart-empty");
+    if (empty) empty.remove();
+  }
+
+  function normalizeChartTime(rawValue) {
+    const text = String(rawValue || "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+    if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(text)) {
+      const [datePart, timePart] = text.split(/\s+/);
+      const date = new Date(`${datePart}T${timePart}:00+08:00`);
+      return Math.floor(date.getTime() / 1000);
     }
-  }, 180));
+    return text;
+  }
+
+  function resizeCharts() {
+    if (wealthChartApi && els.wealthChart) {
+      const size = getChartSize(els.wealthChart, 320);
+      wealthChartApi.resize(size.width, size.height);
+      wealthChartApi.timeScale().fitContent();
+    }
+    if (instrumentChartApi && els.instrumentTrendChart && els.instrumentDrawer.classList.contains("open")) {
+      const size = getChartSize(els.instrumentTrendChart, 480);
+      instrumentChartApi.resize(size.width, size.height);
+      instrumentChartApi.timeScale().fitContent();
+    }
+  }
 
   function formatChartPrice(value) {
     const num = number(value);
@@ -2061,8 +2452,6 @@
     clearTimeout(showToast.timer);
     showToast.timer = setTimeout(() => els.toast.classList.remove("show"), 2200);
   }
-
-  window.addEventListener("resize", debounce(render, 160));
 
   function debounce(fn, delay) {
     let timer;
