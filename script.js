@@ -76,6 +76,12 @@
     transactionFilters: document.getElementById("transactionFilters"),
     transactionRecordList: document.getElementById("transactionRecordList"),
     recentTransactions: document.getElementById("recentTransactions"),
+    analysisRangeFilters: document.getElementById("analysisRangeFilters"),
+    analysisTypeFilters: document.getElementById("analysisTypeFilters"),
+    analysisSummary: document.getElementById("analysisSummary"),
+    analysisChart: document.getElementById("analysisChart"),
+    analysisCalendar: document.getElementById("analysisCalendar"),
+    analysisContributors: document.getElementById("analysisContributors"),
     riskList: document.getElementById("riskList"),
     noteList: document.getElementById("noteList"),
     syncStatusText: document.getElementById("syncStatusText"),
@@ -109,6 +115,8 @@
   let activeType = "all";
   let activeRange = "3m";
   let activeTransactionFilter = "all";
+  let activeAnalysisRange = "3m";
+  let activeAnalysisType = "all";
   let latestLookup = null;
   let cloudSyncReady = false;
   let cloudSyncTimer = null;
@@ -120,6 +128,8 @@
   let activeInstrumentDetail = null;
   let wealthChartApi = null;
   let wealthSeriesApi = null;
+  let analysisChartApi = null;
+  let analysisSeriesApi = null;
   let instrumentChartApi = null;
   let instrumentSeriesApi = null;
   let instrumentAreaSeriesApi = null;
@@ -127,6 +137,10 @@
   let currentInstrumentChartType = null;
   let currentInstrumentRange = "intraday";
   let instrumentChartRequestId = 0;
+  const analysisHistoryCache = new Map();
+  let analysisHistoryInFlight = false;
+  let analysisHistoryQueued = false;
+  let analysisHistoryRefreshPending = false;
   let importPreviewData = null;
   let importPreviewRows = [];
 
@@ -208,6 +222,9 @@
     els.transactionRecordList.addEventListener("click", handleTransactionAction);
     els.transactionFilters.addEventListener("click", handleTransactionFilterClick);
     els.instrumentTransactions.addEventListener("click", handleTransactionAction);
+    els.analysisContributors.addEventListener("click", handleHoldingsAction);
+    els.analysisRangeFilters.addEventListener("click", handleAnalysisRangeClick);
+    els.analysisTypeFilters.addEventListener("click", handleAnalysisTypeClick);
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) syncCloudState();
     });
@@ -685,6 +702,7 @@
     renderHoldings(portfolio);
     renderTransactions();
     renderRecent();
+    renderAnalysis(portfolio);
     renderRisk(portfolio);
     renderNotes();
     drawWealthChart(portfolio);
@@ -743,6 +761,31 @@
     activeTransactionFilter = button.dataset.filter || "all";
     syncTransactionFilterButtons();
     renderTransactions();
+  }
+
+  function handleAnalysisRangeClick(event) {
+    const button = event.target.closest("button[data-analysis-range]");
+    if (!button) return;
+    activeAnalysisRange = button.dataset.analysisRange || "3m";
+    syncAnalysisFilters();
+    renderAnalysis(computePortfolio());
+  }
+
+  function handleAnalysisTypeClick(event) {
+    const button = event.target.closest("button[data-analysis-type]");
+    if (!button) return;
+    activeAnalysisType = button.dataset.analysisType || "all";
+    syncAnalysisFilters();
+    renderAnalysis(computePortfolio());
+  }
+
+  function syncAnalysisFilters() {
+    els.analysisRangeFilters.querySelectorAll("button[data-analysis-range]").forEach((button) => {
+      button.classList.toggle("active", (button.dataset.analysisRange || "3m") === activeAnalysisRange);
+    });
+    els.analysisTypeFilters.querySelectorAll("button[data-analysis-type]").forEach((button) => {
+      button.classList.toggle("active", (button.dataset.analysisType || "all") === activeAnalysisType);
+    });
   }
 
   function syncTransactionFilterButtons() {
@@ -1010,6 +1053,301 @@
         </article>
       `)
       .join("");
+  }
+
+  function renderAnalysis(portfolio) {
+    if (!els.analysisChart) return;
+    syncAnalysisFilters();
+    const data = buildAnalysisData(portfolio);
+    renderAnalysisSummary(data);
+    drawAnalysisChart(data.points);
+    renderAnalysisCalendar(data.points);
+    renderAnalysisContributors(data.contributors);
+    primeAnalysisHistory(portfolio, activeAnalysisType);
+  }
+
+  function buildAnalysisData(portfolio) {
+    const now = new Date();
+    const days = activeAnalysisRange === "1m" ? 31 : activeAnalysisRange === "1y" ? 366 : 92;
+    const start = new Date(now);
+    start.setDate(now.getDate() - days + 1);
+    const rangeStartKey = activeAnalysisRange === "all" ? "" : start.toISOString().slice(0, 10);
+    const endKey = now.toISOString().slice(0, 10);
+    const txRows = getSortedTransactions()
+      .filter((tx) => (tx.status || "confirmed") === "confirmed")
+      .filter((tx) => activeAnalysisType === "all" || tx.type === activeAnalysisType || (activeAnalysisType === "fund" && tx.type === "etf"));
+    const firstTxDate = txRows.find((tx) => tx.date)?.date || endKey;
+    const simulationStart = new Date(`${firstTxDate}T00:00:00`);
+
+    const txByDate = new Map();
+    txRows.forEach((tx) => {
+      const key = tx.date || "";
+      if (!key) return;
+      if (!txByDate.has(key)) txByDate.set(key, []);
+      txByDate.get(key).push(tx);
+    });
+
+    const points = [];
+    const running = new Map();
+    let cash = 0;
+    let realized = 0;
+    let dividends = 0;
+    let invested = 0;
+    let previousPnl = 0;
+
+    for (let cursor = simulationStart; cursor <= now; cursor.setDate(cursor.getDate() + 1)) {
+      const dateKey = cursor.toISOString().slice(0, 10);
+      (txByDate.get(dateKey) || []).forEach((tx) => {
+        const rate = fx[tx.currency] || 1;
+        const price = number(tx.price);
+        const fee = number(tx.fee) * rate;
+        const shares = getTransactionShares(tx);
+        const gross = getTransactionGross(tx) * rate;
+        if (isCashInAction(tx.action)) {
+          cash += gross;
+          invested += gross;
+          return;
+        }
+        if (isCashOutAction(tx.action)) {
+          cash -= gross;
+          invested -= gross;
+          return;
+        }
+        if (isDividendAction(tx.action)) {
+          cash += gross;
+          dividends += gross;
+          return;
+        }
+        const symbol = normalizeSymbol(tx.symbol);
+        if (!running.has(symbol)) {
+          running.set(symbol, { symbol, name: tx.name || symbol, type: tx.type || "fund", quantity: 0, cost: 0, realized: 0 });
+        }
+        const item = running.get(symbol);
+        item.name = tx.name || item.name;
+        item.type = tx.type || item.type;
+        if (isBuyAction(tx.action)) {
+          item.quantity += shares;
+          item.cost += gross + fee;
+          cash -= gross + fee;
+        }
+        if (isSellAction(tx.action)) {
+          const avgCost = item.quantity > 0 ? item.cost / item.quantity : 0;
+          const removedCost = Math.min(shares, item.quantity) * avgCost;
+          const proceeds = gross - fee;
+          item.quantity -= shares;
+          item.cost -= removedCost;
+          item.realized += proceeds - removedCost;
+          realized += proceeds - removedCost;
+          cash += proceeds;
+        }
+      });
+
+      const holdings = Array.from(running.values()).filter((item) => Math.abs(item.quantity) > 0.000001);
+      const marketValue = holdings.reduce((sum, item) => sum + item.quantity * estimateAnalysisPrice(item, dateKey), 0);
+      const cost = holdings.reduce((sum, item) => sum + item.cost, 0);
+      const pnl = marketValue - cost + realized + dividends;
+      points.push({
+        time: dateKey,
+        value: roundMoney(pnl),
+        marketValue: roundMoney(marketValue),
+        cost: roundMoney(cost),
+        invested: roundMoney(invested),
+        cash: roundMoney(cash),
+        dailyPnl: roundMoney(pnl - previousPnl),
+        transactions: (txByDate.get(dateKey) || []).length,
+        missingHistory: holdings.some((item) => !analysisHistoryCache.has(historyCacheKey(item.symbol, dateKey)))
+      });
+      previousPnl = pnl;
+    }
+
+    const contributors = computeAnalysisContributors(portfolio, activeAnalysisType);
+    const visiblePoints = points.filter((point) => (!rangeStartKey || point.time >= rangeStartKey) && point.time <= endKey);
+    const coveredDays = visiblePoints.filter((point) => !point.missingHistory || point.marketValue === 0).length;
+    return {
+      points: visiblePoints,
+      contributors,
+      totalPnl: visiblePoints.length ? visiblePoints[visiblePoints.length - 1].value : 0,
+      startPnl: visiblePoints.length ? visiblePoints[0].value : 0,
+      coverage: visiblePoints.length ? coveredDays / visiblePoints.length : 1
+    };
+  }
+
+  function estimateAnalysisPrice(item, dateKey) {
+    const cached = analysisHistoryCache.get(historyCacheKey(item.symbol, dateKey));
+    if (Number.isFinite(cached?.price) && cached.price > 0) return cached.price;
+    const current = number(state.prices?.[item.symbol]);
+    if (current > 0) return current;
+    return item.quantity > 0 ? item.cost / item.quantity : 0;
+  }
+
+  function computeAnalysisContributors(portfolio, typeFilter) {
+    return portfolio.holdings
+      .filter((holding) => holding.type !== "cash")
+      .filter((holding) => typeFilter === "all" || holding.type === typeFilter || (typeFilter === "fund" && holding.type === "etf"))
+      .map((holding) => ({
+        symbol: holding.symbol,
+        name: holding.name,
+        type: holding.type,
+        pnl: holding.pnl,
+        pnlRate: holding.pnlRate,
+        value: holding.value,
+        weight: holding.weight
+      }))
+      .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
+  }
+
+  function renderAnalysisSummary(data) {
+    const latest = data.points[data.points.length - 1];
+    const best = maxBy(data.points, (point) => point.dailyPnl);
+    const worst = minBy(data.points, (point) => point.dailyPnl);
+    const periodChange = latest ? latest.value - data.startPnl : 0;
+    els.analysisSummary.innerHTML = [
+      { label: "当前累计盈亏", value: moneySigned(data.totalPnl), signed: data.totalPnl },
+      { label: "区间变化", value: moneySigned(periodChange), signed: periodChange },
+      { label: "最佳单日", value: best ? `${best.time.slice(5)} · ${moneySigned(best.dailyPnl)}` : "--", signed: best?.dailyPnl || 0 },
+      { label: "行情覆盖", value: `${percent(data.coverage)}${data.coverage < 1 ? " · 部分兜底" : ""}` }
+    ].map((item) => `
+      <article class="summary-tile">
+        <span>${escapeHtml(item.label)}</span>
+        <strong>${item.signed === undefined ? escapeHtml(item.value) : colorText(item.signed, escapeHtml(item.value))}</strong>
+      </article>
+    `).join("");
+  }
+
+  function drawAnalysisChart(points) {
+    ensureAnalysisChart();
+    if (!analysisSeriesApi) return;
+    const data = points.map((point) => ({ time: point.time, value: point.value }));
+    analysisSeriesApi.setData(data);
+    if (analysisChartApi) analysisChartApi.timeScale().fitContent();
+  }
+
+  function ensureAnalysisChart() {
+    if (!window.LightweightCharts || !els.analysisChart) return;
+    const size = getChartSize(els.analysisChart, 360);
+    if (!analysisChartApi) {
+      analysisChartApi = LightweightCharts.createChart(els.analysisChart, {
+        ...baseChartOptions(size.width, size.height),
+        localization: { priceFormatter: (price) => moneySigned(price) },
+        timeScale: {
+          borderVisible: false,
+          timeVisible: false,
+          rightOffset: 6,
+          barSpacing: 7
+        }
+      });
+      analysisSeriesApi = analysisChartApi.addSeries(LightweightCharts.AreaSeries, {
+        lineColor: chartColors.blue,
+        topColor: "rgba(96, 165, 250, 0.28)",
+        bottomColor: "rgba(96, 165, 250, 0.02)",
+        lineWidth: 2,
+        priceLineVisible: false,
+        priceFormat: { type: "custom", formatter: (price) => moneySigned(price) }
+      });
+    }
+    analysisChartApi.applyOptions({
+      ...baseChartOptions(size.width, size.height),
+      localization: { priceFormatter: (price) => moneySigned(price) }
+    });
+  }
+
+  function renderAnalysisCalendar(points) {
+    const recent = points.slice(-42);
+    if (!recent.length) {
+      els.analysisCalendar.innerHTML = `<div class="record-empty"><strong>暂无日历</strong><span>导入交易流水后生成盈亏热力。</span></div>`;
+      return;
+    }
+    els.analysisCalendar.innerHTML = recent.map((point) => {
+      const level = Math.min(4, Math.floor(Math.abs(point.dailyPnl) / 100) + (point.dailyPnl ? 1 : 0));
+      const cls = point.dailyPnl > 0 ? "gain" : point.dailyPnl < 0 ? "loss" : "flat";
+      return `
+        <div class="calendar-day ${cls} level-${level}" title="${escapeHtml(point.time)} ${escapeHtml(moneySigned(point.dailyPnl))}">
+          <span>${escapeHtml(point.time.slice(8))}</span>
+          <strong>${escapeHtml(shortSigned(point.dailyPnl))}</strong>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function renderAnalysisContributors(rows) {
+    els.analysisContributors.innerHTML = rows.length
+      ? rows.slice(0, 8).map((item) => `
+        <article class="contribution-item">
+          <button class="symbol-cell symbol-link" type="button" data-action="detail" data-symbol="${escapeHtml(item.symbol)}" data-type="${escapeHtml(item.type)}">
+            <strong>${escapeHtml(item.symbol)} · ${escapeHtml(item.name)}</strong>
+            <span>${escapeHtml(typeNames[item.type] || item.type)} · 仓位 ${escapeHtml(percent(item.weight))}</span>
+          </button>
+          <div>
+            <strong>${colorText(item.pnl, moneySigned(item.pnl))}</strong>
+            <span>${colorText(item.pnlRate, percentSigned(item.pnlRate))}</span>
+          </div>
+        </article>
+      `).join("")
+      : `<article class="record-empty"><strong>暂无贡献</strong><span>当前模块还没有持仓或交易。</span></article>`;
+  }
+
+  async function primeAnalysisHistory(portfolio, typeFilter) {
+    if (analysisHistoryInFlight) {
+      analysisHistoryQueued = true;
+      return;
+    }
+    const holdings = portfolio.holdings
+      .filter((holding) => holding.type !== "cash")
+      .filter((holding) => typeFilter === "all" || holding.type === typeFilter || (typeFilter === "fund" && holding.type === "etf"))
+      .slice(0, 12)
+      .filter((holding) => !analysisHistoryCache.has(analysisHistoryLoadedKey(holding.symbol, holding.type)));
+    if (!holdings.length) return;
+
+    analysisHistoryInFlight = true;
+    try {
+      const results = await Promise.allSettled(holdings.map((holding) => fetchAnalysisHistory(holding.symbol, holding.type)));
+      const changed = results.some((result) => result.status === "fulfilled" && result.value?.changed);
+      if (analysisHistoryQueued || changed) {
+        analysisHistoryQueued = false;
+        analysisHistoryRefreshPending = true;
+      }
+    } finally {
+      analysisHistoryInFlight = false;
+      if (analysisHistoryRefreshPending) {
+        analysisHistoryRefreshPending = false;
+        renderAnalysis(computePortfolio());
+      }
+    }
+  }
+
+  async function fetchAnalysisHistory(symbol, type) {
+    const loadedKey = analysisHistoryLoadedKey(symbol, type);
+    if (analysisHistoryCache.has(loadedKey)) return analysisHistoryCache.get(loadedKey);
+    try {
+      let changed = false;
+      const range = activeAnalysisRange === "1m" ? "daily" : activeAnalysisRange === "1y" || activeAnalysisRange === "all" ? "weekly" : "daily";
+      const data = await fetchJson(`/api/chart/${encodeURIComponent(symbol)}?kind=${encodeURIComponent(type || "fund")}&range=${encodeURIComponent(range)}`);
+      const points = Array.isArray(data.points) ? data.points : [];
+      points.forEach((point) => {
+        const dateKey = point.date || (point.time ? String(point.time).slice(0, 10) : "");
+        const price = number(point.value ?? point.close ?? point.open);
+        const key = historyCacheKey(symbol, dateKey);
+        if (dateKey && price > 0 && !analysisHistoryCache.has(key)) {
+          analysisHistoryCache.set(key, { price, source: data.source || "" });
+          changed = true;
+        }
+      });
+      const result = { loaded: true, count: points.length, changed };
+      analysisHistoryCache.set(loadedKey, result);
+      return result;
+    } catch {
+      const result = { loaded: false, changed: false };
+      analysisHistoryCache.set(loadedKey, result);
+      return result;
+    }
+  }
+
+  function analysisHistoryLoadedKey(symbol, type) {
+    return `${normalizeSymbol(symbol)}:${type || "fund"}:loaded`;
+  }
+
+  function historyCacheKey(symbol, dateKey) {
+    return `${normalizeSymbol(symbol)}:${dateKey}`;
   }
 
   function drawWealthChart(portfolio) {
@@ -2189,6 +2527,11 @@
       wealthChartApi.resize(size.width, size.height);
       wealthChartApi.timeScale().fitContent();
     }
+    if (analysisChartApi && els.analysisChart) {
+      const size = getChartSize(els.analysisChart, 360);
+      analysisChartApi.resize(size.width, size.height);
+      analysisChartApi.timeScale().fitContent();
+    }
     if (instrumentChartApi && els.instrumentTrendChart && els.instrumentDrawer.classList.contains("open")) {
       const size = getChartSize(els.instrumentTrendChart, 480);
       instrumentChartApi.resize(size.width, size.height);
@@ -2390,6 +2733,14 @@
     return `${sign}${money(Math.abs(value))}`;
   }
 
+  function shortSigned(value) {
+    const sign = value >= 0 ? "+" : "-";
+    const abs = Math.abs(number(value));
+    if (abs >= 10000) return `${sign}¥${formatNumber(abs / 10000, 1)}万`;
+    if (abs >= 1000) return `${sign}¥${formatNumber(abs / 1000, 1)}k`;
+    return `${sign}¥${formatNumber(abs, 0)}`;
+  }
+
   function percent(value) {
     return `${(number(value) * 100).toFixed(1)}%`;
   }
@@ -2409,6 +2760,18 @@
   function number(value) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function roundMoney(value) {
+    return Math.round(number(value) * 100) / 100;
+  }
+
+  function maxBy(rows, getValue) {
+    return rows.reduce((best, row) => (!best || getValue(row) > getValue(best) ? row : best), null);
+  }
+
+  function minBy(rows, getValue) {
+    return rows.reduce((best, row) => (!best || getValue(row) < getValue(best) ? row : best), null);
   }
 
   function escapeHtml(value) {
