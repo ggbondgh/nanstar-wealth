@@ -16,6 +16,7 @@ const mime = {
 };
 
 const apiCache = new Map();
+const upstreamTimeoutMs = 6000;
 
 http
   .createServer(async (req, res) => {
@@ -535,12 +536,18 @@ async function fetchEastmoneyFundProfile(code) {
 }
 
 async function fetchText(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), upstreamTimeoutMs);
   const response = await fetch(url, {
+    signal: controller.signal,
     headers: {
       "User-Agent": "Mozilla/5.0 NanStar-Wealth/0.1",
       "Referer": "https://fund.eastmoney.com/"
     }
-  });
+  }).catch((error) => {
+    if (error?.name === "AbortError") throw new Error("Upstream timeout");
+    throw error;
+  }).finally(() => clearTimeout(timeout));
   if (!response.ok) throw new Error(`Upstream ${response.status}`);
   return response.text();
 }
