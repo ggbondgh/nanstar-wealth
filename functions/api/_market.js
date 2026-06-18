@@ -214,7 +214,9 @@ async function getStockProfile(code) {
 }
 
 async function fetchInstrumentChart(code, kind, range) {
-  const profile = await getInstrumentProfile(code, kind).catch(() => null);
+  const profile = kind === "stock" || kind === "etf"
+    ? null
+    : await getInstrumentProfile(code, kind).catch(() => null);
   const fundOnly = kind === "fund" || (!kind && profile?.type === "fund");
 
   if (!fundOnly) {
