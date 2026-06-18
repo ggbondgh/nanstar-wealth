@@ -121,12 +121,17 @@
                   <p class="eyebrow">Net Worth</p>
                   <h3>资产曲线</h3>
                 </div>
-                <div class="segmented" role="tablist" aria-label="曲线周期">
-                  <button class="active" type="button" data-range="1m">1M</button>
-                  <button type="button" data-range="3m">3M</button>
-                  <button type="button" data-range="1y">1Y</button>
+                <div class="panel-controls">
+                  <div class="segmented" role="tablist" aria-label="曲线周期">
+                    <button class="active" type="button" data-range="1m">1M</button>
+                    <button type="button" data-range="3m">3M</button>
+                    <button type="button" data-range="1y">1Y</button>
+                    <button type="button" data-range="all">ALL</button>
+                  </div>
+                  <button class="text-button" id="wealthChartReset" type="button">重置视图</button>
                 </div>
               </div>
+              <div class="chart-summary" id="wealthChartSummary"></div>
               <div class="chart-frame">
                 <div id="wealthChart" class="chart-surface" aria-label="资产曲线图"></div>
               </div>
@@ -279,6 +284,7 @@
                     <button type="button" data-analysis-type="stock">股票</button>
                     <button type="button" data-analysis-type="fund">基金</button>
                   </div>
+                  <button class="text-button" id="analysisChartReset" type="button">重置视图</button>
                 </div>
               </div>
               <div class="analysis-summary" id="analysisSummary"></div>
@@ -343,7 +349,7 @@
             </div>
           </div>
           <input id="importFileInput" type="file" accept=".xls,.xlsx,.csv" />
-          <div class="import-preview" id="importFilePreview">选择同花顺导出的文件后会显示解析预览。</div>
+          <div class="import-preview" id="importPreview">选择同花顺导出的文件或文本后会显示解析预览。</div>
           <div class="drawer-actions">
             <button class="ghost-button" id="parseImportFileButton" type="button">解析文件</button>
             <button class="primary-button" id="applyImportFileButton" type="button" disabled>导入文件</button>
@@ -367,13 +373,18 @@
         <section class="panel inset-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">OCR Notes</p>
+              <p class="eyebrow">OCR Placeholder</p>
               <h3>截图 OCR</h3>
             </div>
           </div>
-          <p class="import-note">截图识别建议先转成表格文本，再粘贴进来；后面可以再接自动 OCR。</p>
+          <div class="import-preview import-ocr-slot">
+            <strong>截图导入入口已预留</strong>
+            <span>暂不做自动识别。后续这里会接入同花顺/券商截图 OCR，再进入同一套交易预览和确认流程。</span>
+            <input id="ocrImageInput" type="file" accept="image/*" disabled />
+          </div>
+          <p class="import-note">现在先用 Excel / CSV 或文本粘贴导入；截图 OCR 只保留接口位，不做识别。</p>
           <div class="drawer-actions">
-            <button class="ghost-button" id="ocrImportButton" type="button">预留 OCR</button>
+            <button class="ghost-button" id="ocrImportButton" type="button">OCR 接口占位</button>
           </div>
         </section>
       </div>
@@ -493,7 +504,7 @@
       </form>
     </aside>
 
-    <aside class="modal detail-modal" id="instrumentDrawer" aria-hidden="true" aria-label="标的详情">
+    <aside class="modal detail-modal" id="instrumentDrawer" data-testid="instrument-detail-modal" aria-hidden="true" aria-label="标的详情">
       <div class="drawer-head">
         <div>
           <p class="eyebrow">Instrument Detail</p>
@@ -509,7 +520,10 @@
               <p class="eyebrow">Market Chart</p>
               <h3 id="instrumentChartTitle">行情曲线</h3>
             </div>
-            <span id="instrumentStatus">待查询</span>
+            <div class="lookup-status-row">
+              <span id="instrumentStatus">待查询</span>
+              <button class="text-button" id="instrumentChartReset" type="button">重置视图</button>
+            </div>
           </div>
           <div class="chart-toolbar" id="instrumentChartRanges" aria-label="行情周期">
             <button class="active" type="button" data-instrument-range="intraday">分时</button>
@@ -517,8 +531,10 @@
             <button type="button" data-instrument-range="weekly">周K</button>
             <button type="button" data-instrument-range="monthly">月K</button>
           </div>
+          <div class="chart-meta" id="instrumentChartMeta">选择周期后显示数据来源和行情口径。</div>
           <div class="chart-stats" id="instrumentChartStats"></div>
-          <div id="instrumentTrendChart" class="chart-surface large" aria-label="标的行情图"></div>
+          <div id="instrumentTrendChart" class="chart-surface large" data-testid="instrument-trend-chart" aria-label="标的行情图"></div>
+          <div class="chart-axis-hint" id="instrumentChartAxisHint"></div>
         </div>
         <div class="panel inset-panel">
           <div class="panel-head">

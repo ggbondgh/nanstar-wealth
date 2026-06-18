@@ -27,7 +27,7 @@ http
       return;
     }
 
-    const relPath = rawPath === "/" ? "/index.html" : rawPath;
+    const relPath = rawPath === "/" ? "index.html" : rawPath.replace(/^\/+/, "");
     const filePath = path.normalize(path.join(root, relPath));
 
     if (!filePath.startsWith(root)) {
@@ -58,6 +58,15 @@ http
 
 async function handleApi(rawPath, searchParams, res) {
   const parts = rawPath.split("/").filter(Boolean);
+  if (parts[1] === "ocr") {
+    sendJson(res, 501, {
+      error: "OCR import is reserved but not enabled",
+      status: "placeholder",
+      next: "Upload screenshots can later be parsed here and returned as transaction rows for the existing import preview."
+    });
+    return;
+  }
+
   if (parts[1] === "chart" && parts[2]) {
     try {
       const data = await getInstrumentChart(
@@ -115,7 +124,10 @@ async function getInstrumentProfile(rawCode, kind = "", date = "", time = "") {
   if (!code) throw new Error("Invalid code");
 
   if (kind === "stock") return getStockProfile(code);
-  if (kind === "etf" || kind === "fund") return getFundProfile(code, date, time);
+  if (kind === "etf") return getStockProfile(code)
+    .then((data) => ({ ...data, type: "etf" }))
+    .catch(() => getFundProfile(code, date, time).then((data) => ({ ...data, type: "etf" })));
+  if (kind === "fund") return getFundProfile(code, date, time);
 
   if (/^\d{6}$/.test(code)) {
     return getFundProfile(code, date, time).catch(() => getStockProfile(code));
@@ -152,10 +164,6 @@ async function searchInstruments(query) {
     results.push(item);
   };
 
-  if (/^\d{6}$/.test(q)) {
-    await getInstrumentProfile(q).then((item) => add(normalizeSearchResult(item))).catch(() => null);
-  }
-
   const suggestResults = await searchEastmoneySuggest(q).catch(() => []);
   suggestResults.forEach(add);
 
@@ -174,7 +182,7 @@ async function searchEastmoneySuggest(query) {
     const classify = String(item.Classify || "");
     const securityType = String(item.SecurityTypeName || "");
     const isFund = classify.includes("FUND") || securityType.includes("基金");
-    const isEtf = /ETF/i.test(item.Name || "");
+    const isEtf = isEtfFundName(item.Name || "");
     return {
       code: String(item.Code || item.UnifiedCode || ""),
       symbol: String(item.Code || item.UnifiedCode || ""),
@@ -198,11 +206,15 @@ async function searchFundList(query) {
       code: item.code,
       symbol: item.code,
       name: item.name,
-      type: /ETF/i.test(item.name) ? "etf" : "fund",
+      type: isEtfFundName(item.name) ? "etf" : "fund",
       currency: "CNY",
       source: "eastmoney-fund-list",
       subtitle: item.category
     }));
+}
+
+function isEtfFundName(name) {
+  return /ETF/i.test(name || "") && !/联接|连接/i.test(name || "");
 }
 
 async function getFundCodeList() {
@@ -360,8 +372,13 @@ async function fetchInstrumentChart(code, kind, range) {
 
   const fundProfile = profile || await getFundProfile(code);
   const points = compressFundTrendForRange(fundProfile.trend || [], range);
+  const firstPoint = points.length ? points[0] : null;
+  const latestPoint = points.length ? points[points.length - 1] : null;
+  const latestValue = numberOrNull(latestPoint?.value) ?? numberOrNull(fundProfile.nav);
+  const openValue = numberOrNull(firstPoint?.value);
+  const change = Number.isFinite(latestValue) && Number.isFinite(openValue) ? latestValue - openValue : null;
   return {
-    source: "eastmoney-fund-trend",
+    source: range === "intraday" ? "eastmoney-fund-recent-nav" : "eastmoney-fund-trend",
     code: fundProfile.code || code,
     name: fundProfile.name || code,
     type: fundProfile.type || "fund",
@@ -369,9 +386,13 @@ async function fetchInstrumentChart(code, kind, range) {
     chartType: "line",
     currency: fundProfile.currency || "CNY",
     stats: {
-      latest: numberOrNull(fundProfile.nav),
-      changePct: numberOrNull(fundProfile.estimatedChangePct),
-      latestDate: fundProfile.navDate || (points.length ? points[points.length - 1].date : "")
+      latest: latestValue,
+      open: openValue,
+      high: maxNumber(points.map((point) => point.value)),
+      low: minNumber(points.map((point) => point.value)),
+      change,
+      changePct: Number.isFinite(change) && openValue ? (change / openValue) * 100 : numberOrNull(fundProfile.estimatedChangePct),
+      latestDate: fundProfile.navDate || (latestPoint ? latestPoint.date : "")
     },
     points
   };
@@ -416,15 +437,23 @@ function parseIntradayPayload(payload) {
 
   const latest = points.length ? points[points.length - 1] : null;
   const first = points.length ? points[0] : null;
+  const previousClose = numberOrNull(payload.preClose);
+  const open = numberOrNull(first?.open) ?? numberOrNull(first?.value);
+  const latestValue = numberOrNull(latest?.value);
+  const baseline = Number.isFinite(previousClose) && previousClose > 0 ? previousClose : open;
+  const change = Number.isFinite(latestValue) && Number.isFinite(baseline) ? latestValue - baseline : null;
   return {
     code: payload.code || "",
     name: payload.name || "",
     points,
     stats: {
-      latest: latest?.value ?? null,
-      open: first?.open ?? null,
+      latest: latestValue,
+      open,
+      previousClose,
       high: maxNumber(points.map((point) => point.high)),
       low: minNumber(points.map((point) => point.low)),
+      change,
+      changePct: Number.isFinite(change) && baseline ? (change / baseline) * 100 : null,
       average: latest?.average ?? null,
       volume: sumNumber(points.map((point) => point.volume)),
       latestDate: latest?.time || ""

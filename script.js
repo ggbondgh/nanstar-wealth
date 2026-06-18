@@ -56,6 +56,75 @@
     };
   }
 
+  function instrumentKey(symbol, type = "") {
+    const normalizedSymbol = normalizeSymbol(symbol || "");
+    const normalizedType = String(type || "").trim() || "fund";
+    return normalizedSymbol ? `${normalizedType || "fund"}:${normalizedSymbol}` : "";
+  }
+
+  function sameInstrument(leftSymbol, leftType, rightSymbol, rightType) {
+    return instrumentKey(leftSymbol, leftType) === instrumentKey(rightSymbol, rightType);
+  }
+
+  function cacheLookupData(data, fallbackSymbol = "", fallbackType = "") {
+    if (!data) return;
+    const symbol = normalizeSymbol(data.code || fallbackSymbol || "");
+    const type = String(data.type || fallbackType || "fund").trim();
+    const key = instrumentKey(symbol, type);
+    if (key) lookupBySymbol.set(key, data);
+  }
+
+  function lookupCacheKey(symbol, type, date = "", time = "") {
+    return `${instrumentKey(symbol, type)}:${date || ""}:${time || ""}`;
+  }
+
+  function legacyPriceValue(symbol, type = "") {
+    const key = instrumentKey(symbol, type);
+    return (key && Number.isFinite(state.prices?.[key])) ? state.prices[key] : state.prices?.[symbol];
+  }
+
+  function legacyDayChangeValue(symbol, type = "") {
+    const key = instrumentKey(symbol, type);
+    return (key && Number.isFinite(state.dayChangePct?.[key])) ? state.dayChangePct[key] : state.dayChangePct?.[symbol];
+  }
+
+  function setInstrumentPrice(symbol, type, value) {
+    const key = instrumentKey(symbol, type);
+    if (key && Number.isFinite(value)) state.prices[key] = value;
+  }
+
+  function setInstrumentDayChange(symbol, type, value) {
+    const key = instrumentKey(symbol, type);
+    if (key && Number.isFinite(value)) state.dayChangePct[key] = value;
+  }
+
+  function normalizeInstrumentType(type, symbol = "", name = "") {
+    const current = String(type || "").trim();
+    if (current === "cash" || current === "crypto") return current;
+    const text = `${symbol || ""} ${name || ""}`;
+    const inferred = inferInstrumentType(symbol, name || "");
+    if (name || !current) return inferred;
+    if (current === "fund" || current === "etf" || current === "stock") return current;
+    if (/基金|混合|债券|货币|指数|联接|连接|QDII|FOF|ETF/i.test(text)) return inferred;
+    return inferred;
+  }
+
+  function normalizeTransactionInstrument(tx) {
+    if (!tx) return false;
+    let changed = false;
+    const normalizedSymbol = normalizeSymbol(tx.symbol || "");
+    if (normalizedSymbol && normalizedSymbol !== tx.symbol) {
+      tx.symbol = normalizedSymbol;
+      changed = true;
+    }
+    const inferredType = normalizeInstrumentType(tx.type, tx.symbol, tx.name);
+    if (inferredType && tx.type !== inferredType) {
+      tx.type = inferredType;
+      changed = true;
+    }
+    return changed;
+  }
+
   const els = {
     pageTitle: document.getElementById("pageTitle"),
     totalValue: document.getElementById("totalValue"),
@@ -67,6 +136,7 @@
     cashValue: document.getElementById("cashValue"),
     cashWeight: document.getElementById("cashWeight"),
     wealthChart: document.getElementById("wealthChart"),
+    wealthChartSummary: document.getElementById("wealthChartSummary"),
     allocationChart: document.getElementById("allocationChart"),
     allocationLegend: document.getElementById("allocationLegend"),
     topHoldingsBody: document.getElementById("topHoldingsBody"),
@@ -100,8 +170,10 @@
     instrumentSummary: document.getElementById("instrumentSummary"),
     instrumentStatus: document.getElementById("instrumentStatus"),
     instrumentChartTitle: document.getElementById("instrumentChartTitle"),
+    instrumentChartMeta: document.getElementById("instrumentChartMeta"),
     instrumentChartStats: document.getElementById("instrumentChartStats"),
     instrumentTrendChart: document.getElementById("instrumentTrendChart"),
+    instrumentChartAxisHint: document.getElementById("instrumentChartAxisHint"),
     instrumentTransactions: document.getElementById("instrumentTransactions"),
     instrumentChartRanges: document.getElementById("instrumentChartRanges"),
     drawer: document.getElementById("transactionDrawer"),
@@ -134,6 +206,12 @@
   let instrumentSeriesApi = null;
   let instrumentAreaSeriesApi = null;
   let instrumentCandlesSeriesApi = null;
+  let wealthChartLabelApi = null;
+  let wealthChartCrosshairCleanup = null;
+  let analysisChartLabelApi = null;
+  let analysisChartCrosshairCleanup = null;
+  let instrumentChartLabelApi = null;
+  let instrumentChartCrosshairCleanup = null;
   let currentInstrumentChartType = null;
   let currentInstrumentRange = "intraday";
   let instrumentChartRequestId = 0;
@@ -154,10 +232,10 @@
     document.querySelectorAll("[data-jump]").forEach((button) => {
       button.addEventListener("click", () => switchView(button.dataset.jump));
     });
-    document.querySelectorAll(".segmented button").forEach((button) => {
+    document.querySelectorAll(".segmented button[data-range]").forEach((button) => {
       button.addEventListener("click", () => {
         activeRange = button.dataset.range;
-        document.querySelectorAll(".segmented button").forEach((item) => item.classList.toggle("active", item === button));
+        syncWealthRangeButtons();
         drawWealthChart(computePortfolio());
       });
     });
@@ -184,19 +262,15 @@
     document.getElementById("applyImportFileButton").addEventListener("click", applyImportPreview);
     document.getElementById("parseImportTextButton").addEventListener("click", parseImportText);
     document.getElementById("applyImportTextButton").addEventListener("click", applyImportPreview);
-    document.getElementById("ocrImportButton").addEventListener("click", () => showToast("OCR 会在交易导入格式稳定后接入"));
+    document.getElementById("ocrImportButton").addEventListener("click", handleOcrImportPlaceholder);
     document.getElementById("syncTokenButton").addEventListener("click", configureSyncToken);
     document.getElementById("syncNowButton").addEventListener("click", () => syncCloudState({ forcePush: true }));
     document.getElementById("closeDrawerButton").addEventListener("click", closeDrawer);
     document.getElementById("closeInstrumentButton").addEventListener("click", closeInstrumentDrawer);
+    document.getElementById("wealthChartReset").addEventListener("click", () => resetChartView(wealthChartApi));
+    document.getElementById("analysisChartReset").addEventListener("click", () => resetChartView(analysisChartApi));
+    document.getElementById("instrumentChartReset").addEventListener("click", () => resetChartView(instrumentChartApi));
     els.instrumentChartRanges.addEventListener("click", handleInstrumentRangeClick);
-    els.instrumentChartRanges.querySelectorAll("button[data-instrument-range]").forEach((button) => {
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        changeInstrumentRange(button.dataset.instrumentRange || "daily");
-      });
-    });
     els.backdrop.addEventListener("click", () => {
       if (els.instrumentDrawer.classList.contains("open")) closeInstrumentDrawer();
       else if (document.getElementById("importDrawer").classList.contains("open")) closeImportDrawer();
@@ -233,6 +307,7 @@
     document.getElementById("txDate").value = today;
     document.getElementById("txTime").value = "15:01";
     ensureStateShape();
+    syncWealthRangeButtons();
     updateInputModeLabels();
     render();
     syncCloudState().finally(() => refreshMarketData());
@@ -433,12 +508,14 @@
   async function refreshMarketData() {
     const instruments = new Map();
     state.transactions.forEach((tx) => {
+      normalizeTransactionInstrument(tx);
       if (!tx.symbol || tx.type === "cash") return;
-      instruments.set(tx.symbol, { symbol: tx.symbol, type: tx.type || "fund" });
+      instruments.set(instrumentKey(tx.symbol, tx.type), { symbol: tx.symbol, type: tx.type || "fund", name: tx.name || "" });
     });
     (state.watchlist || []).forEach((item) => {
+      item.type = normalizeInstrumentType(item.type, item.symbol, item.name);
       if (!item.symbol || item.type === "cash") return;
-      instruments.set(item.symbol, { symbol: item.symbol, type: item.type || "fund" });
+      instruments.set(instrumentKey(item.symbol, item.type), { symbol: item.symbol, type: item.type || "fund", name: item.name || "" });
     });
     if (!instruments.size) return;
 
@@ -453,17 +530,18 @@
             ? data.estimatedNav
             : null;
       if (Number.isFinite(latestPrice)) {
-        state.prices[item.symbol] = latestPrice;
+        setInstrumentPrice(item.symbol, item.type, latestPrice);
         updated = true;
       }
       if (Number.isFinite(data.estimatedChangePct)) {
-        state.dayChangePct[item.symbol] = data.estimatedChangePct / 100;
+        setInstrumentDayChange(item.symbol, item.type, data.estimatedChangePct / 100);
         updated = true;
       }
-      lookupBySymbol.set(item.symbol, data);
+      cacheLookupData(data, item.symbol, item.type);
     }));
 
     await Promise.allSettled(state.transactions.map(async (tx) => {
+      normalizeTransactionInstrument(tx);
       const needsHistoricalPrice = (tx.type === "fund" || tx.type === "etf")
         && tx.inputMode === "amount"
         && (isBuyAction(tx.action) || isSellAction(tx.action))
@@ -471,11 +549,18 @@
         && (!number(tx.price) || number(tx.price) === 1);
       if (!needsHistoricalPrice) return;
       const data = await fetchJson(`/api/instrument/${encodeURIComponent(tx.symbol)}?kind=${encodeURIComponent(tx.type)}&date=${encodeURIComponent(tx.date || "")}&time=${encodeURIComponent(tx.time || "")}`);
-      if (Number.isFinite(data.priceOnDate)) {
-        tx.price = data.priceOnDate;
+      const derivedPrice = Number.isFinite(data.priceOnDate)
+        ? data.priceOnDate
+        : Number.isFinite(data.nav)
+          ? data.nav
+          : Number.isFinite(data.estimatedNav)
+            ? data.estimatedNav
+            : null;
+      if (Number.isFinite(derivedPrice)) {
+        tx.price = derivedPrice;
         updated = true;
       }
-      lookupBySymbol.set(tx.symbol, data);
+      cacheLookupData(data, tx.symbol, tx.type);
     }));
 
     if (updated) {
@@ -492,6 +577,7 @@
     let migrated = false;
     if (removeDemoSeedData()) migrated = true;
     state.transactions.forEach((tx) => {
+      if (normalizeTransactionInstrument(tx)) migrated = true;
       if (!tx.status) {
         tx.status = "confirmed";
         migrated = true;
@@ -499,13 +585,40 @@
       if (!tx.inputMode && tx.type === "fund" && tx.action === "buy" && number(tx.quantity) <= 1 && number(tx.price) > 100) {
         tx.inputMode = "amount";
         tx.quantity = number(tx.price);
-        const currentPrice = state.prices?.[tx.symbol] || 0;
+        const currentPrice = legacyPriceValue(tx.symbol, tx.type) || 0;
         tx.price = currentPrice > 0 && currentPrice < 100 ? currentPrice : 1;
         tx.note = tx.note ? `${tx.note} · 已按金额模式修正` : "已按金额模式修正";
         migrated = true;
       }
       if (!tx.time && (tx.type === "fund" || tx.type === "etf")) {
         tx.time = "15:01";
+        migrated = true;
+      }
+      const oldPrice = state.prices?.[tx.symbol];
+      if (Number.isFinite(oldPrice)) {
+        setInstrumentPrice(tx.symbol, tx.type, oldPrice);
+        migrated = true;
+      }
+      const oldDayChange = state.dayChangePct?.[tx.symbol];
+      if (Number.isFinite(oldDayChange)) {
+        setInstrumentDayChange(tx.symbol, tx.type, oldDayChange);
+        migrated = true;
+      }
+    });
+    (state.watchlist || []).forEach((item) => {
+      const nextType = normalizeInstrumentType(item.type, item.symbol, item.name);
+      if (nextType && item.type !== nextType) {
+        item.type = nextType;
+        migrated = true;
+      }
+      const oldPrice = state.prices?.[item.symbol];
+      if (Number.isFinite(oldPrice)) {
+        setInstrumentPrice(item.symbol, item.type, oldPrice);
+        migrated = true;
+      }
+      const oldDayChange = state.dayChangePct?.[item.symbol];
+      if (Number.isFinite(oldDayChange)) {
+        setInstrumentDayChange(item.symbol, item.type, oldDayChange);
         migrated = true;
       }
     });
@@ -586,7 +699,9 @@
       const quantity = getTransactionShares(tx);
       const gross = getTransactionGross(tx) * rate;
       const signedFee = fee * rate;
-      const key = tx.symbol.toUpperCase();
+      normalizeTransactionInstrument(tx);
+      const symbol = normalizeSymbol(tx.symbol);
+      const key = instrumentKey(symbol, tx.type);
 
       if (isCashInAction(tx.action)) {
         cash += gross;
@@ -603,10 +718,12 @@
         dividends += gross;
         return;
       }
+      if (!key) return;
 
       if (!holdingsMap.has(key)) {
         holdingsMap.set(key, {
-          symbol: key,
+          key,
+          symbol,
           name: tx.name,
           type: tx.type,
           account: tx.account,
@@ -644,12 +761,12 @@
       .filter((holding) => Math.abs(holding.quantity) > 0.000001)
       .map((holding) => {
         const rate = fx[holding.currency] || 1;
-        const price = state.prices[holding.symbol] ?? 1;
+        const price = legacyPriceValue(holding.symbol, holding.type) ?? 1;
         const value = holding.quantity * price * rate;
         const pnl = value - holding.cost + holding.realized;
         const pnlRate = holding.cost > 0 ? pnl / holding.cost : 0;
         const avgCost = holding.quantity > 0 ? holding.cost / holding.quantity / rate : 0;
-        const dayChange = value * (state.dayChangePct[holding.symbol] || 0);
+        const dayChange = value * (legacyDayChangeValue(holding.symbol, holding.type) || 0);
         return { ...holding, price, value, pnl, pnlRate, avgCost, dayChange };
       });
 
@@ -747,8 +864,8 @@
   }
 
   function renderHoldings(portfolio) {
-    const ownedSymbols = new Set(portfolio.holdings.map((holding) => holding.symbol));
-    const watchOnly = getWatchOnlyRows(ownedSymbols);
+    const ownedKeys = new Set(portfolio.holdings.map((holding) => instrumentKey(holding.symbol, holding.type)));
+    const watchOnly = getWatchOnlyRows(ownedKeys);
     const combined = [...portfolio.holdings, ...watchOnly];
     const filtered = combined.filter((holding) => activeType === "all" || holding.type === activeType);
     els.holdingsBody.innerHTML = filtered.map(holdingRow).join("");
@@ -788,6 +905,12 @@
     });
   }
 
+  function syncWealthRangeButtons() {
+    document.querySelectorAll(".segmented button[data-range]").forEach((button) => {
+      button.classList.toggle("active", (button.dataset.range || "3m") === activeRange);
+    });
+  }
+
   function syncTransactionFilterButtons() {
     if (!els.transactionFilters) return;
     els.transactionFilters.querySelectorAll("button[data-filter]").forEach((button) => {
@@ -804,6 +927,12 @@
     if (!filter || filter === "all") return true;
     if (filter === "pending") return status === "pending";
     return tx.action === filter;
+  }
+
+  function transactionMatchesAnalysisType(tx, typeFilter = "all") {
+    if (!typeFilter || typeFilter === "all") return true;
+    if (typeFilter === "fund") return tx.type === "fund" || tx.type === "etf";
+    return tx.type === typeFilter;
   }
 
   function transactionStatusClass(status) {
@@ -886,11 +1015,11 @@
     `;
   }
 
-  function getWatchOnlyRows(ownedSymbols) {
+  function getWatchOnlyRows(ownedKeys) {
     return (state.watchlist || [])
-      .filter((item) => !ownedSymbols.has(item.symbol))
+      .filter((item) => !ownedKeys.has(instrumentKey(item.symbol, item.type)))
       .map((item) => {
-        const price = state.prices[item.symbol] ?? 0;
+        const price = legacyPriceValue(item.symbol, item.type) ?? 0;
         return {
           ...item,
           account: "自选",
@@ -907,13 +1036,21 @@
   }
 
   function holdingRow(holding) {
+    const canShowMarketDetail = holding.type !== "cash";
     return `
       <tr data-symbol="${escapeHtml(holding.symbol)}" data-type="${escapeHtml(holding.type)}">
         <td>
-          <button class="symbol-cell symbol-link" type="button" data-action="detail" data-symbol="${escapeHtml(holding.symbol)}" data-type="${escapeHtml(holding.type)}">
-            <strong>${escapeHtml(holding.symbol)}</strong>
-            <span>${escapeHtml(holding.name)}${holding.watchOnly ? " · 自选" : ""}</span>
-          </button>
+          ${canShowMarketDetail ? `
+            <button class="symbol-cell symbol-link" type="button" data-action="detail" data-symbol="${escapeHtml(holding.symbol)}" data-type="${escapeHtml(holding.type)}">
+              <strong>${escapeHtml(holding.symbol)}</strong>
+              <span>${escapeHtml(holding.name)}${holding.watchOnly ? " · 自选" : ""}</span>
+            </button>
+          ` : `
+            <div class="symbol-cell">
+              <strong>${escapeHtml(holding.symbol)}</strong>
+              <span>${escapeHtml(holding.name)}</span>
+            </div>
+          `}
         </td>
         <td>${escapeHtml(holding.account)}</td>
         <td>${holding.watchOnly ? "--" : formatNumber(holding.quantity)}</td>
@@ -924,8 +1061,8 @@
         <td>${holding.watchOnly ? "自选" : percent(holding.weight)}</td>
         <td>
           <div class="row-actions">
-            <button type="button" data-action="detail" data-symbol="${escapeHtml(holding.symbol)}" data-type="${escapeHtml(holding.type)}">详情</button>
-            ${holding.watchOnly ? `<button type="button" data-action="remove-watch" data-symbol="${escapeHtml(holding.symbol)}">移除</button>` : ""}
+            ${canShowMarketDetail ? `<button type="button" data-action="detail" data-symbol="${escapeHtml(holding.symbol)}" data-type="${escapeHtml(holding.type)}">详情</button>` : ""}
+            ${holding.watchOnly ? `<button type="button" data-action="remove-watch" data-symbol="${escapeHtml(holding.symbol)}" data-type="${escapeHtml(holding.type)}">移除</button>` : ""}
           </div>
         </td>
       </tr>
@@ -933,13 +1070,21 @@
   }
 
   function topHoldingRow(holding) {
+    const canShowMarketDetail = holding.type !== "cash";
     return `
       <tr data-symbol="${escapeHtml(holding.symbol)}" data-type="${escapeHtml(holding.type)}">
         <td>
-          <button class="symbol-cell symbol-link" type="button" data-action="detail" data-symbol="${escapeHtml(holding.symbol)}" data-type="${escapeHtml(holding.type)}">
-            <strong>${escapeHtml(holding.symbol)}</strong>
-            <span>${escapeHtml(holding.name)}</span>
-          </button>
+          ${canShowMarketDetail ? `
+            <button class="symbol-cell symbol-link" type="button" data-action="detail" data-symbol="${escapeHtml(holding.symbol)}" data-type="${escapeHtml(holding.type)}">
+              <strong>${escapeHtml(holding.symbol)}</strong>
+              <span>${escapeHtml(holding.name)}</span>
+            </button>
+          ` : `
+            <div class="symbol-cell">
+              <strong>${escapeHtml(holding.symbol)}</strong>
+              <span>${escapeHtml(holding.name)}</span>
+            </div>
+          `}
         </td>
         <td><span class="badge">${typeNames[holding.type] || holding.type}</span></td>
         <td>${money(holding.value)}</td>
@@ -947,7 +1092,7 @@
         <td>${percent(holding.weight)}</td>
         <td>
           <div class="row-actions">
-            <button type="button" data-action="detail" data-symbol="${escapeHtml(holding.symbol)}" data-type="${escapeHtml(holding.type)}">详情</button>
+            ${canShowMarketDetail ? `<button type="button" data-action="detail" data-symbol="${escapeHtml(holding.symbol)}" data-type="${escapeHtml(holding.type)}">详情</button>` : ""}
           </div>
         </td>
       </tr>
@@ -1058,7 +1203,7 @@
   function renderAnalysis(portfolio) {
     if (!els.analysisChart) return;
     syncAnalysisFilters();
-    const data = buildAnalysisData(portfolio, getPortfolioTimeline());
+    const data = buildAnalysisData(portfolio);
     renderAnalysisSummary(data);
     drawAnalysisChart(data.points);
     renderAnalysisCalendar(data.points);
@@ -1066,16 +1211,17 @@
     primeAnalysisHistory(portfolio, activeAnalysisType);
   }
 
-  function buildAnalysisData(portfolio, timeline = getPortfolioTimeline()) {
+  function buildAnalysisData(portfolio) {
     const now = new Date();
     const days = activeAnalysisRange === "1m" ? 31 : activeAnalysisRange === "1y" ? 366 : 92;
     const start = new Date(now);
     start.setDate(now.getDate() - days + 1);
     const rangeStartKey = activeAnalysisRange === "all" ? "" : start.toISOString().slice(0, 10);
     const endKey = now.toISOString().slice(0, 10);
+    const timeline = getPortfolioTimeline(activeAnalysisType);
     const txRows = getSortedTransactions()
       .filter((tx) => (tx.status || "confirmed") === "confirmed")
-      .filter((tx) => activeAnalysisType === "all" || tx.type === activeAnalysisType || (activeAnalysisType === "fund" && tx.type === "etf"));
+      .filter((tx) => transactionMatchesAnalysisType(tx, activeAnalysisType));
 
     const contributors = computeAnalysisContributors(portfolio, activeAnalysisType);
     const visiblePoints = timeline
@@ -1086,19 +1232,37 @@
         value: point.pnl
       }));
     const coveredDays = visiblePoints.filter((point) => !point.missingHistory || point.marketValue === 0).length;
+    const maxDrawdown = computeMaxDrawdown(visiblePoints.map((point) => point.value));
+    const latest = visiblePoints.length ? visiblePoints[visiblePoints.length - 1] : null;
     return {
       points: visiblePoints,
       contributors,
       totalPnl: visiblePoints.length ? visiblePoints[visiblePoints.length - 1].value : 0,
       startPnl: visiblePoints.length ? visiblePoints[0].value : 0,
-      coverage: visiblePoints.length ? coveredDays / visiblePoints.length : 1
+      maxDrawdown,
+      coverage: visiblePoints.length ? coveredDays / visiblePoints.length : 1,
+      realizedPnl: latest?.realizedPnl || 0,
+      unrealizedPnl: latest?.unrealizedPnl || 0,
+      dividends: latest?.dividends || 0
     };
   }
 
+  function computeMaxDrawdown(values) {
+    let peak = -Infinity;
+    let drawdown = 0;
+    values.forEach((value) => {
+      const current = number(value);
+      if (!Number.isFinite(current)) return;
+      peak = Math.max(peak, current);
+      if (Number.isFinite(peak)) drawdown = Math.min(drawdown, current - peak);
+    });
+    return drawdown;
+  }
+
   function estimateAnalysisPrice(item, dateKey) {
-    const cached = analysisHistoryCache.get(historyCacheKey(item.symbol, dateKey));
+    const cached = analysisHistoryCache.get(historyCacheKey(item.symbol, item.type, dateKey));
     if (Number.isFinite(cached?.price) && cached.price > 0) return cached.price;
-    const current = number(state.prices?.[item.symbol]);
+    const current = number(legacyPriceValue(item.symbol, item.type));
     if (current > 0) return current;
     return item.quantity > 0 ? item.cost / item.quantity : 0;
   }
@@ -1127,7 +1291,12 @@
     els.analysisSummary.innerHTML = [
       { label: "当前累计盈亏", value: moneySigned(data.totalPnl), signed: data.totalPnl },
       { label: "区间变化", value: moneySigned(periodChange), signed: periodChange },
+      { label: "浮动盈亏", value: moneySigned(data.unrealizedPnl), signed: data.unrealizedPnl },
+      { label: "已实现盈亏", value: moneySigned(data.realizedPnl), signed: data.realizedPnl },
+      { label: "分红现金流", value: moneySigned(data.dividends), signed: data.dividends },
       { label: "最佳单日", value: best ? `${best.time.slice(5)} · ${moneySigned(best.dailyPnl)}` : "--", signed: best?.dailyPnl || 0 },
+      { label: "最差单日", value: worst ? `${worst.time.slice(5)} · ${moneySigned(worst.dailyPnl)}` : "--", signed: worst?.dailyPnl || 0 },
+      { label: "最大回撤", value: moneySigned(data.maxDrawdown), signed: data.maxDrawdown },
       { label: "行情覆盖", value: `${percent(data.coverage)}${data.coverage < 1 ? " · 部分兜底" : ""}` }
     ].map((item) => `
       <article class="summary-tile">
@@ -1145,9 +1314,33 @@
       return;
     }
     clearInlineChartEmpty(els.analysisChart);
-    const data = points.map((point) => ({ time: point.time, value: point.value }));
+    const data = points.map((point) => ({
+      time: point.time,
+      value: point.value,
+      dailyPnl: point.dailyPnl,
+      unrealizedPnl: point.unrealizedPnl,
+      realizedPnl: point.realizedPnl,
+      dividends: point.dividends,
+      marketValue: point.marketValue,
+      cost: point.cost,
+      cash: point.cash
+    }));
     analysisSeriesApi.setData(data);
-    if (analysisChartApi) analysisChartApi.timeScale().fitContent();
+    if (analysisChartApi) {
+      applySeriesAutoscale(analysisSeriesApi);
+      bindChartCrosshair(analysisChartApi, {
+        container: els.analysisChart,
+        formatPrice: (value) => moneySigned(value),
+        formatTime: (time) => formatChartLabelTime(time),
+        formatExtra: (point) => point ? `累计 ${moneySigned(point.value)} · 日变动 ${moneySigned(point.dailyPnl)} · 浮动 ${moneySigned(point.unrealizedPnl || 0)}` : "",
+        series: analysisSeriesApi,
+        setCleanup: (cleanup) => { analysisChartCrosshairCleanup = cleanup; },
+        getCleanup: () => analysisChartCrosshairCleanup,
+        setLabel: (label) => { analysisChartLabelApi = label; },
+        pointMap: buildPointMap(data)
+      });
+      analysisChartApi.timeScale().fitContent();
+    }
   }
 
   function ensureAnalysisChart() {
@@ -1175,29 +1368,55 @@
         priceLineVisible: false,
         priceFormat: { type: "custom", formatter: (price) => moneySigned(price) }
       });
+      applySeriesAutoscale(analysisSeriesApi);
     }
     analysisChartApi.applyOptions({
       ...baseChartOptions(size.width, size.height),
       localization: { priceFormatter: (price) => moneySigned(price) }
     });
+    setTimeScaleFormatters(analysisChartApi, {
+      timeVisible: false,
+      tick: (time) => formatChartLabelTime(time, { short: true })
+    });
   }
 
   function renderAnalysisCalendar(points) {
-    const recent = points.slice(-42);
-    if (!recent.length) {
+    const windowed = sliceAnalysisCalendarPoints(points);
+    if (!windowed.length) {
       els.analysisCalendar.innerHTML = `<div class="record-empty"><strong>暂无日历</strong><span>导入交易流水后生成盈亏热力。</span></div>`;
       return;
     }
-    els.analysisCalendar.innerHTML = recent.map((point) => {
+    const weekdayHeads = ["一", "二", "三", "四", "五", "六", "日"]
+      .map((day) => `<div class="calendar-head">${day}</div>`);
+    const startDate = new Date(`${windowed[0].time}T00:00:00`);
+    const offset = Number.isNaN(startDate.getTime()) ? 0 : (startDate.getDay() + 6) % 7;
+    const blanks = Array.from({ length: offset }, () => `<div class="calendar-day blank" aria-hidden="true"></div>`);
+    const days = [];
+    let lastMonth = "";
+    windowed.forEach((point) => {
+      const month = point.time.slice(0, 7);
+      if (month !== lastMonth) {
+        days.push(`<div class="calendar-month">${escapeHtml(month)}</div>`);
+        lastMonth = month;
+      }
       const level = Math.min(4, Math.floor(Math.abs(point.dailyPnl) / 100) + (point.dailyPnl ? 1 : 0));
       const cls = point.dailyPnl > 0 ? "gain" : point.dailyPnl < 0 ? "loss" : "flat";
-      return `
+      days.push(`
         <div class="calendar-day ${cls} level-${level}" title="${escapeHtml(point.time)} ${escapeHtml(moneySigned(point.dailyPnl))}">
-          <span>${escapeHtml(point.time.slice(8))}</span>
+          <span>${escapeHtml(point.time.slice(5))}</span>
           <strong>${escapeHtml(shortSigned(point.dailyPnl))}</strong>
         </div>
-      `;
-    }).join("");
+      `);
+    });
+    els.analysisCalendar.innerHTML = [...weekdayHeads, ...blanks, ...days].join("");
+  }
+
+  function sliceAnalysisCalendarPoints(points) {
+    const list = Array.isArray(points) ? points : [];
+    if (activeAnalysisRange === "1m") return list.slice(-31);
+    if (activeAnalysisRange === "1y") return list.slice(-186);
+    if (activeAnalysisRange === "all") return list.slice(-365);
+    return list.slice(-92);
   }
 
   function renderAnalysisContributors(rows) {
@@ -1257,7 +1476,7 @@
       points.forEach((point) => {
         const dateKey = point.date || (point.time ? String(point.time).slice(0, 10) : "");
         const price = number(point.value ?? point.close ?? point.open);
-        const key = historyCacheKey(symbol, dateKey);
+        const key = historyCacheKey(symbol, type, dateKey);
         if (dateKey && price > 0 && !analysisHistoryCache.has(key)) {
           analysisHistoryCache.set(key, { price, source: data.source || "" });
           changed = true;
@@ -1277,14 +1496,16 @@
     return `${normalizeSymbol(symbol)}:${type || "fund"}:loaded`;
   }
 
-  function historyCacheKey(symbol, dateKey) {
-    return `${normalizeSymbol(symbol)}:${dateKey}`;
+  function historyCacheKey(symbol, type, dateKey) {
+    return `${instrumentKey(symbol, type)}:${dateKey}`;
   }
 
-  function getPortfolioTimeline() {
+  function getPortfolioTimeline(typeFilter = "all") {
     const now = new Date();
     const endKey = now.toISOString().slice(0, 10);
-    const txRows = getSortedTransactions().filter((tx) => (tx.status || "confirmed") === "confirmed");
+    const txRows = getSortedTransactions()
+      .filter((tx) => (tx.status || "confirmed") === "confirmed")
+      .filter((tx) => transactionMatchesAnalysisType(tx, typeFilter));
     const firstTxDate = txRows.find((tx) => tx.date)?.date || endKey;
     const simulationStart = new Date(`${firstTxDate}T00:00:00`);
     const txByDate = new Map();
@@ -1310,11 +1531,13 @@
         const shares = getTransactionShares(tx);
         const gross = getTransactionGross(tx) * rate;
         if (isCashInAction(tx.action)) {
+          if (typeFilter !== "all") return;
           cash += gross;
           invested += gross;
           return;
         }
         if (isCashOutAction(tx.action)) {
+          if (typeFilter !== "all") return;
           cash -= gross;
           invested -= gross;
           return;
@@ -1324,17 +1547,19 @@
           dividends += gross;
           return;
         }
+        normalizeTransactionInstrument(tx);
         const symbol = normalizeSymbol(tx.symbol);
-        if (!running.has(symbol)) {
-          running.set(symbol, { symbol, name: tx.name || symbol, type: tx.type || "fund", quantity: 0, cost: 0, realized: 0 });
+        const key = instrumentKey(symbol, tx.type);
+        if (!running.has(key)) {
+          running.set(key, { symbol, name: tx.name || symbol, type: tx.type || "fund", quantity: 0, cost: 0, realized: 0 });
         }
-        const item = running.get(symbol);
+        const item = running.get(key);
         item.name = tx.name || item.name;
         item.type = tx.type || item.type;
         if (isBuyAction(tx.action)) {
           item.quantity += shares;
           item.cost += gross + fee;
-          cash -= gross + fee;
+          if (typeFilter === "all") cash -= gross + fee;
         }
         if (isSellAction(tx.action)) {
           const avgCost = item.quantity > 0 ? item.cost / item.quantity : 0;
@@ -1344,7 +1569,7 @@
           item.cost -= removedCost;
           item.realized += proceeds - removedCost;
           realized += proceeds - removedCost;
-          cash += proceeds;
+          if (typeFilter === "all") cash += proceeds;
         }
       });
 
@@ -1352,18 +1577,21 @@
       const marketValue = holdings.reduce((sum, item) => sum + item.quantity * estimateAnalysisPrice(item, dateKey), 0);
       const cost = holdings.reduce((sum, item) => sum + item.cost, 0);
       const pnl = marketValue - cost + realized + dividends;
-      const totalValue = marketValue + cash;
+      const totalValue = marketValue + (typeFilter === "all" ? cash : 0);
       points.push({
         time: dateKey,
         value: roundMoney(totalValue),
         pnl: roundMoney(pnl),
+        unrealizedPnl: roundMoney(marketValue - cost),
+        realizedPnl: roundMoney(realized),
+        dividends: roundMoney(dividends),
         marketValue: roundMoney(marketValue),
         cost: roundMoney(cost),
         invested: roundMoney(invested),
         cash: roundMoney(cash),
         dailyPnl: roundMoney(pnl - previousPnl),
         transactions: (txByDate.get(dateKey) || []).length,
-        missingHistory: holdings.some((item) => !analysisHistoryCache.has(historyCacheKey(item.symbol, dateKey)))
+        missingHistory: holdings.some((item) => !analysisHistoryCache.has(historyCacheKey(item.symbol, item.type, dateKey)))
       });
       previousPnl = pnl;
     }
@@ -1375,16 +1603,77 @@
     ensureWealthChart();
     const points = buildWealthSeries(portfolio, activeRange);
     if (!points.length || (points.length === 1 && !points[0].value)) {
+      renderWealthChartSummary([]);
       showInlineChartEmpty(els.wealthChart, "导入交易流水后生成资产曲线");
       return;
     }
     clearInlineChartEmpty(els.wealthChart);
-    wealthSeriesApi.setData(points.map((point) => ({
+    renderWealthChartSummary(points);
+    const data = points.map((point) => ({
       time: point.time,
       value: point.value
-    })));
+    }));
+    wealthSeriesApi.setData(data);
+    applySeriesAutoscale(wealthSeriesApi);
+    bindChartCrosshair(wealthChartApi, {
+      container: els.wealthChart,
+      formatPrice: (value) => shortMoney(value),
+      formatTime: (time) => formatChartLabelTime(time),
+      formatExtra: (point) => point ? `资产 ${shortMoney(point.value)}` : "",
+      series: wealthSeriesApi,
+      setCleanup: (cleanup) => { wealthChartCrosshairCleanup = cleanup; },
+      getCleanup: () => wealthChartCrosshairCleanup,
+      setLabel: (label) => { wealthChartLabelApi = label; },
+      pointMap: buildPointMap(data)
+    });
+    if (wealthChartApi) wealthChartApi.timeScale().fitContent();
     const last = points[points.length - 1];
     els.totalValue.dataset.current = String(last?.value || portfolio.totalValue || 0);
+  }
+
+  function renderWealthChartSummary(points) {
+    if (!els.wealthChartSummary) return;
+    if (!Array.isArray(points) || !points.length) {
+      els.wealthChartSummary.innerHTML = [
+        { label: "区间变化", value: "--" },
+        { label: "区间高点", value: "--" },
+        { label: "区间低点", value: "--" },
+        { label: "时间范围", value: "--" }
+      ].map(summaryChip).join("");
+      return;
+    }
+    if (points.length === 1) {
+      const only = points[0];
+      els.wealthChartSummary.innerHTML = [
+        { label: "当前资产", value: shortMoney(only.value) },
+        { label: "区间高点", value: shortMoney(only.value) },
+        { label: "区间低点", value: shortMoney(only.value) },
+        { label: "时间范围", value: `${formatChartLabelTime(only.time, { short: true })} · 1 天` }
+      ].map(summaryChip).join("");
+      return;
+    }
+    const first = points[0];
+    const last = points[points.length - 1];
+    const values = points.map((point) => number(point.value)).filter(Number.isFinite);
+    const high = Math.max(...values);
+    const low = Math.min(...values);
+    const change = number(last.value) - number(first.value);
+    const changeRate = first.value ? change / number(first.value) : 0;
+    els.wealthChartSummary.innerHTML = [
+      { label: "区间变化", value: `${moneySigned(change)} · ${percentSigned(changeRate)}`, signed: change },
+      { label: "区间高点", value: shortMoney(high) },
+      { label: "区间低点", value: shortMoney(low) },
+      { label: "时间范围", value: `${formatChartLabelTime(first.time, { short: true })} - ${formatChartLabelTime(last.time, { short: true })} · ${points.length} 天` }
+    ].map(summaryChip).join("");
+  }
+
+  function summaryChip(item) {
+    return `
+      <article class="chart-summary-chip">
+        <span>${escapeHtml(item.label)}</span>
+        <strong>${item.signed === undefined ? escapeHtml(item.value) : colorText(item.signed, escapeHtml(item.value))}</strong>
+      </article>
+    `;
   }
 
   function buildWealthSeries(portfolio, range) {
@@ -1393,7 +1682,7 @@
     const start = new Date(now);
     start.setDate(now.getDate() - days + 1);
     const startKey = start.toISOString().slice(0, 10);
-    const timeline = getPortfolioTimeline().filter((point) => point.time >= startKey);
+    const timeline = getPortfolioTimeline("all").filter((point) => range === "all" ? true : point.time >= startKey);
     if (timeline.length) return timeline.map((point) => ({ time: point.time, date: point.time.slice(5), value: point.value }));
     const today = now.toISOString().slice(0, 10);
     return [{ time: today, date: today.slice(5), value: portfolio.totalValue || 0 }];
@@ -1431,12 +1720,17 @@
           formatter: (price) => shortMoney(price)
         }
       });
+      applySeriesAutoscale(wealthSeriesApi);
     }
     wealthChartApi.applyOptions({
       ...baseChartOptions(size.width, size.height),
       localization: {
         priceFormatter: (price) => shortMoney(price)
       }
+    });
+    setTimeScaleFormatters(wealthChartApi, {
+      timeVisible: false,
+      tick: (time) => formatChartLabelTime(time, { short: true })
     });
   }
 
@@ -1463,7 +1757,10 @@
       rightPriceScale: {
         borderVisible: false,
         entireTextOnly: true,
-        scaleMargins: { top: 0.18, bottom: 0.18 }
+        alignLabels: true,
+        ticksVisible: true,
+        minimumWidth: 72,
+        scaleMargins: { top: 0.2, bottom: 0.2 }
       },
       leftPriceScale: {
         visible: false,
@@ -1481,6 +1778,172 @@
         pinch: true
       }
     };
+  }
+
+  function applySeriesAutoscale(series) {
+    if (!series?.applyOptions) return;
+    series.applyOptions({
+      autoscaleInfoProvider: (original) => {
+        const info = original();
+        if (!info?.priceRange) return info;
+        const min = Number(info.priceRange.minValue);
+        const max = Number(info.priceRange.maxValue);
+        if (!Number.isFinite(min) || !Number.isFinite(max)) return info;
+        const rawSpan = Math.abs(max - min);
+        const padding = rawSpan > 0
+          ? Math.max(rawSpan * 0.18, Math.abs(max) * 0.005, Math.abs(min) * 0.005, 1)
+          : Math.max(Math.abs(max) * 0.05, 1);
+        return {
+          ...info,
+          priceRange: {
+            minValue: min - padding,
+            maxValue: max + padding
+          }
+        };
+      }
+    });
+  }
+
+  function resetChartView(chart) {
+    if (!chart?.timeScale) return;
+    try {
+      chart.timeScale().fitContent();
+    } catch {
+      // Chart runtime may be missing when a panel has not been rendered yet.
+    }
+  }
+
+  function setTimeScaleFormatters(chart, options = {}) {
+    if (!chart?.applyOptions) return;
+    chart.applyOptions({
+      timeScale: {
+        timeVisible: Boolean(options.timeVisible),
+        secondsVisible: false,
+        tickMarkFormatter: options.tick || undefined
+      }
+    });
+  }
+
+  function bindChartCrosshair(chart, options = {}) {
+    if (!chart || !options.container) return;
+    const cleanupRef = options.getCleanup ? options.getCleanup() : null;
+    if (cleanupRef) cleanupRef();
+    const label = ensureChartLabel(options.container);
+    const handleMove = (param) => {
+      if (!param || !param.point) {
+        label.hidden = true;
+        return;
+      }
+      const hovered = mergeHoveredPoint(
+        getPointFromMap(options.pointMap, param.time),
+        getHoveredSeriesPoint(options.series, param.seriesData)
+      );
+      if (!hovered) {
+        label.hidden = true;
+        return;
+      }
+      const parts = [
+        options.formatTime ? options.formatTime(hovered.time || hovered.date || "") : formatChartLabelTime(hovered.time || hovered.date || ""),
+        options.formatPrice ? options.formatPrice(number(hovered.value ?? hovered.close ?? hovered.open)) : formatChartPrice(hovered.value ?? hovered.close ?? hovered.open)
+      ];
+      const extra = options.formatExtra ? options.formatExtra(hovered) : "";
+      label.innerHTML = `
+        <span>${escapeHtml(parts[0])}</span>
+        <strong>${escapeHtml(parts[1])}</strong>
+        ${extra ? `<small>${escapeHtml(extra)}</small>` : ""}
+      `;
+      label.hidden = false;
+      positionChartLabel(label, options.container, param.point);
+    };
+    chart.subscribeCrosshairMove(handleMove);
+    if (options.setCleanup) {
+      options.setCleanup(() => {
+        chart.unsubscribeCrosshairMove(handleMove);
+        label.hidden = true;
+      });
+    }
+    if (options.setLabel) options.setLabel(label);
+  }
+
+  function buildPointMap(points) {
+    const map = new Map();
+    (points || []).forEach((point) => {
+      const key = chartTimeKey(point.time || point.date);
+      if (key) map.set(key, point);
+    });
+    return map;
+  }
+
+  function getPointFromMap(map, time) {
+    if (!map) return null;
+    return map.get(chartTimeKey(time)) || null;
+  }
+
+  function ensureChartLabel(container) {
+    let label = container.querySelector(".chart-tooltip");
+    if (!label) {
+      label = document.createElement("div");
+      label.className = "chart-tooltip";
+      container.appendChild(label);
+    }
+    return label;
+  }
+
+  function positionChartLabel(label, container, point) {
+    const rect = container.getBoundingClientRect();
+    const box = label.getBoundingClientRect();
+    const width = box.width || 190;
+    const height = box.height || 78;
+    const x = Math.min(Math.max(point.x + 14, 12), Math.max(12, rect.width - width - 12));
+    const y = Math.min(Math.max(point.y + 14, 12), Math.max(12, rect.height - height - 12));
+    label.style.transform = `translate(${x}px, ${y}px)`;
+  }
+
+  function getHoveredSeriesPoint(series, seriesData) {
+    if (!series || !seriesData) return null;
+    if (typeof seriesData.get === "function") {
+      const point = seriesData.get(series);
+      if (point) return point;
+    }
+    return null;
+  }
+
+  function mergeHoveredPoint(mapped, seriesPoint) {
+    if (!mapped) return seriesPoint || null;
+    if (!seriesPoint) return mapped;
+    return { ...mapped, ...seriesPoint };
+  }
+
+  function chartTimeKey(value) {
+    if (!value) return "";
+    if (typeof value === "number") return String(value);
+    if (typeof value === "string") return value;
+    if (typeof value === "object" && value.year && value.month && value.day) {
+      return `${value.year}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
+    }
+    return String(value);
+  }
+
+  function formatChartLabelTime(value, options = {}) {
+    if (value && typeof value === "object" && value.year && value.month && value.day) {
+      const text = `${value.year}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
+      return options.short ? text.slice(5) : text;
+    }
+    const text = String(value || "").trim();
+    if (!text) return "--";
+    if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(text)) return options.short ? text.slice(11, 16) : text.slice(0, 16);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return options.short ? text.slice(5) : text;
+    if (/^\d{10}$/.test(text)) {
+      const date = new Date(Number(text) * 1000);
+      if (!Number.isNaN(date.getTime())) {
+        const mm = String(date.getMonth() + 1).padStart(2, "0");
+        const dd = String(date.getDate()).padStart(2, "0");
+        const hh = String(date.getHours()).padStart(2, "0");
+        const mi = String(date.getMinutes()).padStart(2, "0");
+        return options.short ? `${hh}:${mi}` : `${date.getFullYear()}-${mm}-${dd} ${hh}:${mi}`;
+      }
+    }
+    return text;
   }
 
   function getChartSize(element, fallbackHeight) {
@@ -1617,17 +2080,31 @@
       showToast("先选择同花顺导出的 Excel 或 CSV 文件");
       return;
     }
-    if (!window.XLSX) {
-      showImportPreview([], "Excel 解析库未加载，请刷新页面后重试。");
-      return;
-    }
     try {
       const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, { type: "array", cellDates: false });
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
-      setImportPreview(rows, `文件：${file.name}`);
+      const candidates = [];
+      let parseError = "";
+      if (window.XLSX) {
+        try {
+          const workbook = XLSX.read(buffer, { type: "array", cellDates: false });
+          const sheetName = workbook.SheetNames[0];
+          const sheet = workbook.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" });
+          candidates.push({ rows, label: `文件：${file.name}` });
+        } catch (error) {
+          parseError = error.message || "Excel 解析失败";
+        }
+      }
+      const textRows = extractImportRowsFromText(decodeImportBuffer(buffer));
+      if (textRows.length) {
+        candidates.push({ rows: textRows, label: `文件：${file.name}（文本/GBK 表格）` });
+      }
+      const best = selectBestImportCandidate(candidates);
+      if (!best) {
+        showImportPreview([], parseError || "文件解析失败，请确认是同花顺导出的 .xls/.xlsx/.csv。");
+        return;
+      }
+      setImportPreview(best.rows, best.label);
     } catch (error) {
       showImportPreview([], error.message || "文件解析失败");
     }
@@ -1639,7 +2116,16 @@
       showToast("先粘贴交易流水文本");
       return;
     }
-    setImportPreview(parseDelimitedText(text), "文本粘贴");
+    setImportPreview(extractImportRowsFromText(text), "文本粘贴");
+  }
+
+  async function handleOcrImportPlaceholder() {
+    try {
+      await fetch("/api/ocr", { method: "POST", cache: "no-store" });
+    } catch {
+      // Local static-only previews may not have the placeholder endpoint.
+    }
+    showToast("截图 OCR 接口已预留，暂未启用；先用 Excel / CSV 或文本粘贴导入");
   }
 
   function setImportPreview(rows, sourceLabel) {
@@ -1650,6 +2136,36 @@
     showImportPreview(parsed.rows, parsed.message);
   }
 
+  function selectBestImportCandidate(candidates) {
+    return (candidates || [])
+      .map((candidate) => {
+        const rows = normalizeImportRows(candidate.rows);
+        if (!rows.length) return null;
+        const parsed = buildImportPreview(rows, candidate.label);
+        return {
+          ...candidate,
+          rows,
+          parsed,
+          score: scoreImportCandidate(rows, parsed)
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => right.score - left.score)[0] || null;
+  }
+
+  function scoreImportCandidate(rows, parsed) {
+    const validCount = parsed?.meta?.validCount || 0;
+    const rowCount = parsed?.rows?.length || 0;
+    const mappedFields = parsed?.meta?.mappedFields || 0;
+    const headerScore = parsed?.meta?.headerScore || 0;
+    const mojibakePenalty = countMojibakeText(rows.flat().join(" ")) * 60;
+    return validCount * 120 + mappedFields * 35 + headerScore * 20 - (rowCount - validCount) * 8 - mojibakePenalty;
+  }
+
+  function countMojibakeText(text) {
+    return (String(text || "").match(/[\u00c0-\u00ff]{2,}|�/g) || []).length;
+  }
+
   function parseDelimitedText(text) {
     return text
       .split(/\r?\n/)
@@ -1658,8 +2174,60 @@
       .map((line) => {
         if (line.includes("\t")) return line.split("\t");
         if (line.includes(",")) return splitCsvLine(line);
-        return line.split(/\s{2,}|\s(?=\d{6}\b)/).filter(Boolean);
-      });
+        if (line.includes("|")) return line.split("|");
+        return line.split(/\s+/).filter(Boolean);
+      })
+      .map((row) => row.map(cleanImportCell));
+  }
+
+  function extractImportRowsFromText(text) {
+    const normalized = String(text || "").replace(/\u00a0/g, " ");
+    if (/<table|<tr|<td|<th/i.test(normalized)) {
+      const htmlRows = parseHtmlTableRows(normalized);
+      if (htmlRows.length) return htmlRows;
+    }
+    return parseDelimitedText(normalized);
+  }
+
+  function parseHtmlTableRows(text) {
+    try {
+      const doc = new DOMParser().parseFromString(text, "text/html");
+      return Array.from(doc.querySelectorAll("tr"))
+        .map((row) => Array.from(row.querySelectorAll("th,td")).map((cell) => cleanImportCell(cell.textContent || "")))
+        .filter((row) => row.some(Boolean));
+    } catch {
+      return [];
+    }
+  }
+
+  function decodeImportBuffer(buffer) {
+    const encodings = ["utf-8", "gb18030", "gbk", "gb2312"];
+    let best = "";
+    let bestScore = -Infinity;
+    encodings.forEach((encoding) => {
+      try {
+        const text = new TextDecoder(encoding).decode(buffer);
+        const score = scoreImportText(text);
+        if (score > bestScore) {
+          best = text;
+          bestScore = score;
+        }
+      } catch {
+        // Some browsers do not expose every legacy decoder.
+      }
+    });
+    return best;
+  }
+
+  function scoreImportText(text) {
+    const source = String(text || "");
+    const headerHits = (source.match(/日期|时间|证券|基金|代码|名称|成交|买入|卖出|金额|份额|数量/g) || []).length;
+    const replacementPenalty = (source.match(/\uFFFD/g) || []).length;
+    return headerHits * 10 - replacementPenalty;
+  }
+
+  function cleanImportCell(value) {
+    return String(value ?? "").replace(/\s+/g, " ").trim();
   }
 
   function splitCsvLine(line) {
@@ -1693,31 +2261,55 @@
   function buildImportPreview(rows, sourceLabel = "导入数据") {
     if (!rows.length) return { rows: [], message: "没有识别到可用表格行。" };
     const headerIndex = findImportHeaderIndex(rows);
-    const headers = rows[headerIndex] || [];
-    const fieldMap = mapImportHeaders(headers);
-    const dataRows = rows.slice(headerIndex + 1);
+    const headerScore = scoreImportHeaderRow(rows[headerIndex] || []);
+    const hasHeader = headerScore >= 2;
+    const headers = hasHeader ? (rows[headerIndex] || []) : [];
+    const fieldMap = hasHeader ? mapImportHeaders(headers) : emptyImportFieldMap();
+    const mappedFields = Object.values(fieldMap).filter((index) => Number.isInteger(index) && index >= 0).length;
+    const dataRows = hasHeader ? rows.slice(headerIndex + 1) : rows;
     const previewRows = dataRows
       .map((row, index) => parseImportRow(row, headers, fieldMap, index))
       .filter(Boolean);
-    const validCount = previewRows.filter((row) => row.valid).length;
+    const validCount = previewRows.filter((row) => row.valid && !row.ignored).length;
+    const confidence = mappedFields >= 4 ? "强识别" : mappedFields >= 2 ? "中等识别" : "弱识别，请人工核对";
     return {
       rows: previewRows,
-      message: `${sourceLabel} · 识别 ${previewRows.length} 行，可导入 ${validCount} 行`
+      message: `${sourceLabel} · ${confidence} · 识别 ${previewRows.length} 行，可导入 ${validCount} 行 · ${describeImportMapping(fieldMap, headers)}`,
+      meta: {
+        validCount,
+        rowCount: previewRows.length,
+        mappedFields,
+        headerScore,
+        hasHeader
+      }
     };
+  }
+
+  function describeImportMapping(fieldMap, headers) {
+    const labels = {
+      date: "日期",
+      time: "时间",
+      symbol: "代码",
+      name: "名称",
+      action: "动作",
+      price: "价格",
+      quantity: "数量",
+      amount: "金额",
+      fee: "手续费",
+      account: "账户"
+    };
+    const items = Object.entries(fieldMap)
+      .filter(([, index]) => Number.isInteger(index) && index >= 0)
+      .slice(0, 5)
+      .map(([field, index]) => `${labels[field] || field}:${headers[index] || "-"}`);
+    return items.length ? `字段映射 ${items.join(" / ")}` : "字段映射未识别";
   }
 
   function findImportHeaderIndex(rows) {
     let bestIndex = 0;
     let bestScore = -1;
     rows.slice(0, 12).forEach((row, index) => {
-      const text = row.join("|");
-      const score = [
-        /日期|时间/.test(text),
-        /代码|证券/.test(text),
-        /名称/.test(text),
-        /买卖|业务|操作/.test(text),
-        /成交|发生|金额|价格|数量/.test(text)
-      ].filter(Boolean).length;
+      const score = scoreImportHeaderRow(row);
       if (score > bestScore) {
         bestScore = score;
         bestIndex = index;
@@ -1726,21 +2318,58 @@
     return bestIndex;
   }
 
+  function scoreImportHeaderRow(row) {
+    const text = (row || []).join("|");
+    return [
+      /日期|时间/.test(text),
+      /代码|证券|基金|产品/.test(text),
+      /名称/.test(text),
+      /买卖|业务|操作|方向|摘要/.test(text),
+      /成交|发生|确认|申请|委托/.test(text),
+      /金额|价格|均价|净值|数量|份额/.test(text)
+    ].filter(Boolean).length;
+  }
+
+  function emptyImportFieldMap() {
+    return {
+      date: -1,
+      time: -1,
+      symbol: -1,
+      name: -1,
+      action: -1,
+      status: -1,
+      price: -1,
+      quantity: -1,
+      amount: -1,
+      cashAmount: -1,
+      fee: -1,
+      fees: [],
+      account: -1
+    };
+  }
+
   function mapImportHeaders(headers) {
     const normalized = headers.map(normalizeHeader);
     const pick = (...patterns) => normalized.findIndex((header) => patterns.some((pattern) => pattern.test(header)));
-    return {
-      date: pick(/成交日期|交易日期|发生日期|日期/),
+    const feeIndexes = normalized
+      .map((header, index) => (/手续费|佣金|印花税|经手费|过户费|费用|规费|其他费/.test(header) ? index : -1))
+      .filter((index) => index >= 0);
+    const fieldMap = {
+      date: pick(/成交日期|交易日期|发生日期|业务日期|委托日期|申请日期|确认日期|日期/),
       time: pick(/成交时间|委托时间|时间/),
-      symbol: pick(/证券代码|基金代码|代码|产品代码/),
-      name: pick(/证券名称|基金名称|名称|产品名称/),
-      action: pick(/买卖标志|买卖方向|操作|业务名称|业务类型|摘要/),
-      price: pick(/成交价格|成交价|价格|净值/),
-      quantity: pick(/成交数量|成交份额|发生数量|数量|份额/),
-      amount: pick(/成交金额|发生金额|清算金额|金额|本金/),
-      fee: pick(/手续费|佣金|费用|规费|过户费/),
-      account: pick(/账户|股东账户|资金账号/)
+      symbol: pick(/证券代码|基金代码|股票代码|产品代码|代码/),
+      name: pick(/证券名称|基金名称|股票名称|产品名称|名称/),
+      action: pick(/买卖标志|买卖方向|买卖类别|委托类别|操作|方向|业务名称|业务类型|摘要/),
+      status: pick(/成交状态|委托状态|交易状态|状态|结果/),
+      price: pick(/成交均价|成交价格|成交价|确认净值|申请价格|委托价格|价格|净值/),
+      quantity: pick(/成交数量|成交份额|确认份额|申请份额|发生数量|数量|份额/),
+      amount: pick(/成交金额|确认金额|申请金额|清算金额|委托金额|成交额|本金/),
+      cashAmount: pick(/发生金额|流水金额|资金发生额|资金变动|变动金额/),
+      fee: pick(/手续费|佣金|印花税|经手费|过户费|费用|规费|其他费/),
+      account: pick(/账户|股东账户|资金账号|资金账户|客户号/)
     };
+    fieldMap.fees = feeIndexes;
+    return fieldMap;
   }
 
   function parseImportRow(row, headers, fieldMap, index) {
@@ -1749,36 +2378,44 @@
       return headerIndex >= 0 ? String(row[headerIndex] ?? "").trim() : "";
     };
     const fallback = buildImportFallback(row);
-    const symbol = normalizeSymbol(cell("symbol") || fallback.symbol);
+    const symbol = normalizeImportSymbol(cell("symbol") || fallback.symbol);
     const name = cell("name") || fallback.name || symbol;
     const date = normalizeImportDate(cell("date") || fallback.date);
     const time = normalizeImportTime(cell("time") || fallback.time);
     const action = normalizeImportAction(cell("action") || fallback.action);
+    const status = normalizeImportStatus(cell("status"));
     const price = parseImportNumber(cell("price") || fallback.price);
-    const amount = parseImportNumber(cell("amount") || fallback.amount);
+    const tradeAmount = parseImportNumber(cell("amount") || fallback.amount);
+    const cashAmount = parseImportNumber(cell("cashAmount") || fallback.cashAmount);
     const quantity = parseImportNumber(cell("quantity") || fallback.quantity);
-    const fee = parseImportNumber(cell("fee") || "0");
+    const fee = parseImportFee(row, fieldMap, cell("fee") || fallback.fee);
     const type = inferInstrumentType(symbol, name);
-    const derivedPrice = price > 0 ? price : (amount > 0 && quantity > 0 ? amount / quantity : 0);
+    const cashFlowAction = isImportCashFlowAction(action);
+    const dividendAction = action === "dividend" || action === "bonus";
+    const amount = cashFlowAction || dividendAction ? (cashAmount || tradeAmount) : tradeAmount;
+    const derivedPrice = price > 0 ? price : (amount > 0 && quantity > 0 && !cashFlowAction ? amount / quantity : 0);
     const inputMode = amount > 0 ? "amount" : "shares";
     const txQuantity = amount > 0 ? amount : quantity;
     const txPrice = derivedPrice > 0 ? derivedPrice : 1;
     const reasons = [];
     if (!date) reasons.push("缺少日期");
-    if (!symbol) reasons.push("缺少代码");
+    if (!symbol && !cashFlowAction && !dividendAction) reasons.push("缺少代码");
     if (!action) reasons.push("缺少买卖方向");
+    if (action === "ignore") reasons.push("非资金交易");
     if (!txQuantity) reasons.push("缺少金额或数量");
-    if (inputMode === "shares" && !derivedPrice) reasons.push("缺少价格");
+    if (inputMode === "shares" && !derivedPrice && !cashFlowAction && !dividendAction) reasons.push("缺少价格");
     if ((action === "buy" || action === "sell") && type === "stock" && !derivedPrice) reasons.push("股票交易缺少成交价");
+    const finalSymbol = symbol || (cashFlowAction || dividendAction ? "CASH" : "");
+    const finalName = name || (cashFlowAction || dividendAction ? actionNames[action] || "现金流水" : symbol);
     const tx = {
       id: "",
       date,
       time,
       action: action || "buy",
-      status: "confirmed",
-      symbol,
-      name,
-      type,
+      status,
+      symbol: finalSymbol,
+      name: finalName,
+      type: cashFlowAction || (dividendAction && !symbol) ? "cash" : type,
       account: cell("account") || "同花顺导入",
       inputMode,
       quantity: txQuantity,
@@ -1793,31 +2430,166 @@
       raw: row,
       tx,
       valid: reasons.length === 0,
+      ignored: action === "ignore",
       reason: reasons.join("；")
     };
+  }
+
+  function parseImportFee(row, fieldMap, fallbackValue = "") {
+    const feeIndexes = Array.isArray(fieldMap.fees) ? fieldMap.fees : [];
+    const sum = feeIndexes.reduce((total, index) => total + parseImportNumber(row[index]), 0);
+    return sum || parseImportNumber(fallbackValue || "0");
+  }
+
+  function isImportCashFlowAction(action) {
+    return action === "deposit" || action === "withdraw";
   }
 
   function buildImportFallback(row) {
     const joined = row.join(" ");
     const date = row.find((cell) => normalizeImportDate(cell)) || "";
     const time = row.find((cell) => normalizeImportTime(cell)) || "";
-    const symbol = (joined.match(/\b\d{6}\b/) || [])[0] || "";
+    const symbol = normalizeImportSymbol((joined.match(/(?:\b\d{6}\b|\b\d{6}\.[A-Z]{2,4}\b|\b(?:SH|SZ|OF|XSHG|XSHE)\d{6}\b)/i) || [])[0] || "");
     const action = row.find((cell) => normalizeImportAction(cell)) || "";
-    const numbers = row.map(parseImportNumber).filter((value) => value > 0);
+    const numberItems = extractImportNumberItems(row, { symbol });
+    const price = pickFallbackPrice(numberItems);
+    const quantity = pickFallbackQuantity(numberItems, price);
+    const amount = pickFallbackAmount(numberItems, price, quantity);
+    const cashAmount = pickFallbackCashAmount(numberItems, amount);
+    const fee = pickFallbackFee(numberItems, price, quantity, amount);
     return {
       date,
       time,
       symbol,
-      name: "",
+      name: pickFallbackName(row, symbol),
       action,
-      price: numbers.find((value) => value > 0 && value < 10000) || 0,
-      quantity: numbers.find((value) => value >= 100) || 0,
-      amount: numbers.find((value) => value >= 1000) || 0
+      price,
+      quantity,
+      amount,
+      cashAmount,
+      fee
     };
+  }
+
+  function pickFallbackName(row, symbol) {
+    const normalizedSymbol = normalizeImportSymbol(symbol);
+    if (!normalizedSymbol) return "";
+    const symbolIndex = row.findIndex((cell) => normalizeImportSymbol(cell) === normalizedSymbol);
+    const candidates = row
+      .map((cell, index) => ({ text: String(cell || "").trim(), index }))
+      .filter((item) => item.text)
+      .filter((item) => item.index !== symbolIndex)
+      .filter((item) => !normalizeImportDate(item.text))
+      .filter((item) => !normalizeImportTime(item.text))
+      .filter((item) => !normalizeImportAction(item.text))
+      .filter((item) => !isImportStatusText(item.text))
+      .filter((item) => !isImportNumericOnly(item.text))
+      .filter((item) => /[\u4e00-\u9fa5A-Za-z]/.test(item.text))
+      .map((item) => item.text);
+    return candidates[0] || "";
+  }
+
+  function isImportNumericOnly(value) {
+    const text = String(value || "").trim();
+    if (!text) return false;
+    const stripped = text.replace(/[,\s￥¥元份股.%+-]/g, "");
+    return /^\d+(?:\.\d+)?$/.test(stripped);
+  }
+
+  function isImportStatusText(value) {
+    return /已成交|成交|确认成功|撤单|废单|取消|已撤销|失败|未成交|作废|待确认|待成交|处理中|挂起|部分成交/.test(String(value || ""));
+  }
+
+  function extractImportNumberItems(row, options = {}) {
+    const symbol = String(options.symbol || "");
+    return row
+      .map((cell, index) => {
+        const text = String(cell || "").trim();
+        const value = parseImportNumber(text);
+        return { text, index, value };
+      })
+      .filter((item) => item.value > 0)
+      .filter((item) => !normalizeImportDate(item.text))
+      .filter((item) => !normalizeImportTime(item.text))
+      .filter((item) => !(symbol && item.text.includes(symbol)))
+      .filter((item) => isImportNumericOnly(item.text))
+      .filter((item) => !/^\d{6}$/.test(item.text.replace(/\D/g, "")))
+      .filter((item) => !/^\d{8}$/.test(item.text.replace(/\D/g, "")));
+  }
+
+  function pickFallbackPrice(items) {
+    const explicit = items.find((item) => /价|净值|均价/.test(item.text) && item.value > 0 && item.value < 10000);
+    if (explicit) return explicit.value;
+    return items.find((item) => item.value > 0 && item.value < 1000 && !Number.isInteger(item.value))?.value
+      || items.find((item) => item.value > 0 && item.value < 20)?.value
+      || 0;
+  }
+
+  function pickFallbackQuantity(items, price) {
+    const explicit = items.find((item) => /份|股|数量/.test(item.text) && item.value > 0);
+    if (explicit) return explicit.value;
+    return items
+      .filter((item) => item.value >= 1)
+      .filter((item) => !price || Math.abs(item.value - price) > 0.000001)
+      .sort((a, b) => a.value - b.value)
+      .find((item) => item.value >= 10 && item.value < 10000000)?.value || 0;
+  }
+
+  function pickFallbackAmount(items, price, quantity) {
+    const explicit = items.find((item) => /金额|发生|成交|本金|清算/.test(item.text) && item.value > 0);
+    if (explicit) return explicit.value;
+    const derived = price > 0 && quantity > 0 ? price * quantity : 0;
+    const candidates = items
+      .filter((item) => item.value >= 100)
+      .filter((item) => Math.abs(item.value - price) > 0.000001)
+      .filter((item) => Math.abs(item.value - quantity) > 0.000001)
+      .sort((a, b) => b.value - a.value);
+    if (derived > 0) {
+      const nearDerived = candidates.find((item) => Math.abs(item.value - derived) / derived < 0.08);
+      if (nearDerived) return nearDerived.value;
+    }
+    return candidates[0]?.value || 0;
+  }
+
+  function pickFallbackCashAmount(items, amount) {
+    const explicit = items.find((item) => /发生金额|流水金额|资金发生额|资金变动|变动金额/.test(item.text) && item.value > 0);
+    if (explicit) return explicit.value;
+    return amount || 0;
+  }
+
+  function pickFallbackFee(items, price, quantity, amount) {
+    const explicit = items.find((item) => /佣金|印花税|过户费|手续费|费用|规费/.test(item.text) && item.value >= 0);
+    if (explicit) return explicit.value;
+    return items
+      .filter((item) => item.value > 0 && item.value <= 100)
+      .filter((item) => Math.abs(item.value - price) > 0.000001)
+      .filter((item) => Math.abs(item.value - quantity) > 0.000001)
+      .filter((item) => Math.abs(item.value - amount) > 0.000001)
+      .sort((a, b) => a.index - b.index)
+      .at(-1)?.value || 0;
   }
 
   function normalizeHeader(value) {
     return String(value || "").replace(/\s+/g, "").replace(/[()（）:：]/g, "");
+  }
+
+  function normalizeImportSymbol(value) {
+    const text = String(value || "").trim().toUpperCase();
+    if (!text) return "";
+    const compact = text.replace(/\s+/g, "");
+    const dotMatched = compact.match(/^(\d{6})\.(SH|SZ|OF|XSHE|XSHG)$/);
+    if (dotMatched) return dotMatched[1];
+    const prefixed = compact.match(/^(SH|SZ|OF|XSHG|XSHE)(\d{6})$/);
+    if (prefixed) return prefixed[2];
+    return compact.replace(/[^A-Z0-9.]/g, "");
+  }
+
+  function normalizeImportStatus(value) {
+    const text = String(value || "").trim();
+    if (!text) return "confirmed";
+    if (/撤单|废单|取消|已撤销|失败|未成交|作废/.test(text)) return "failed";
+    if (/待确认|待成交|处理中|挂起|部分成交|部分/.test(text)) return "pending";
+    return "confirmed";
   }
 
   function normalizeImportDate(value) {
@@ -1839,11 +2611,13 @@
 
   function normalizeImportAction(value) {
     const text = String(value || "").trim();
-    if (/申购|认购|买入|买|定投/.test(text)) return "buy";
-    if (/赎回|卖出|卖/.test(text)) return "sell";
-    if (/分红|红利/.test(text)) return "dividend";
-    if (/转入|入金|存入/.test(text)) return "deposit";
-    if (/转出|出金|取出/.test(text)) return "withdraw";
+    if (/指定交易|签约/.test(text)) return "ignore";
+    if (/申购|认购|买入|买进|买|定投|证券买入|基金申购/.test(text)) return "buy";
+    if (/赎回|卖出|卖|证券卖出|基金赎回/.test(text)) return "sell";
+    if (/红利税补扣|扣税|补扣/.test(text)) return "withdraw";
+    if (/分红|红利入账|利息归本|结息/.test(text)) return "dividend";
+    if (/银行转证券|划入|转入|入金|存入/.test(text)) return "deposit";
+    if (/证券转银行|划出|转出|出金|取出/.test(text)) return "withdraw";
     return "";
   }
 
@@ -1857,16 +2631,30 @@
 
   function inferInstrumentType(symbol, name = "") {
     const text = `${symbol} ${name}`;
-    if (/ETF|LOF|510|159|588|512/.test(text)) return "etf";
+    if (/ETF/i.test(text) && /联接|连接/i.test(text)) return "fund";
+    if (/ETF|LOF/i.test(text)) return "etf";
+    if (/^\d{6}$/.test(symbol) && /^(510|511|512|513|515|516|517|518|588|159|162|163|164|165|166|168|169)/.test(symbol)) return "etf";
     if (/基金|混合|债券|货币|指数|QDII|FOF/.test(text)) return "fund";
     return /^\d{6}$/.test(symbol) ? "stock" : "fund";
   }
 
   function showImportPreview(rows, message = "") {
-    const preview = document.getElementById("importFilePreview");
-    const validRows = rows.filter((row) => row.valid);
-    document.getElementById("applyImportFileButton").disabled = !validRows.length;
-    document.getElementById("applyImportTextButton").disabled = !validRows.length;
+    const preview = document.getElementById("importPreview");
+    const existing = new Set(state.transactions.map(transactionSignature));
+    const seen = new Set();
+    rows.forEach((row) => {
+      if (!row?.tx || !row.valid || row.ignored) {
+        row.duplicate = false;
+        return;
+      }
+      const signature = transactionSignature(row.tx);
+      row.duplicate = existing.has(signature) || seen.has(signature);
+      seen.add(signature);
+    });
+    const importableRows = rows.filter((row) => row.valid && !row.ignored && !row.duplicate);
+    const duplicateCount = rows.filter((row) => row.duplicate).length;
+    document.getElementById("applyImportFileButton").disabled = !importableRows.length;
+    document.getElementById("applyImportTextButton").disabled = !importableRows.length;
     if (!rows.length) {
       preview.innerHTML = `<div class="import-empty">${escapeHtml(message || "暂无预览")}</div>`;
       return;
@@ -1874,7 +2662,7 @@
     preview.innerHTML = `
       <div class="import-preview-head">
         <strong>${escapeHtml(message)}</strong>
-        <span>${validRows.length}/${rows.length} 可导入</span>
+        <span>${importableRows.length}/${rows.length} 可新增${duplicateCount ? ` · ${duplicateCount} 重复` : ""}</span>
       </div>
       <table>
         <thead>
@@ -1886,20 +2674,22 @@
             <th>名称</th>
             <th>金额/份额</th>
             <th>价格</th>
+            <th>费用</th>
             <th>原因</th>
           </tr>
         </thead>
         <tbody>
           ${rows.slice(0, 80).map((row) => `
             <tr>
-              <td><span class="status-pill ${row.valid ? "confirmed" : "failed"}">${row.valid ? "可导入" : "跳过"}</span></td>
+              <td><span class="status-pill ${row.valid && !row.ignored && !row.duplicate ? "confirmed" : "failed"}">${row.ignored ? "忽略" : (row.valid ? (row.duplicate ? "重复" : "可导入") : "跳过")}</span></td>
               <td>${escapeHtml(row.tx.date || "--")}</td>
               <td>${escapeHtml(actionNames[row.tx.action] || row.tx.action || "--")}</td>
               <td>${escapeHtml(row.tx.symbol || "--")}</td>
               <td>${escapeHtml(row.tx.name || "--")}</td>
               <td>${escapeHtml(row.tx.inputMode === "amount" ? money(row.tx.quantity, row.tx.currency) : formatNumber(row.tx.quantity))}</td>
               <td>${escapeHtml(formatChartPrice(row.tx.price))}</td>
-              <td>${escapeHtml(row.reason || "--")}</td>
+              <td>${escapeHtml(money(row.tx.fee || 0, row.tx.currency))}</td>
+              <td>${escapeHtml(row.ignored ? "非资金交易，已忽略" : (row.duplicate ? "已存在相同流水" : row.reason || "--"))}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -1909,7 +2699,9 @@
   }
 
   async function applyImportPreview() {
-    const rows = importPreviewRows.filter((row) => row.valid).map((row) => ({ ...row.tx }));
+    const rows = importPreviewRows
+      .filter((row) => row.valid && !row.ignored && !row.duplicate)
+      .map((row) => ({ ...row.tx }));
     if (!rows.length) {
       showToast("没有可导入的交易行");
       return;
@@ -1918,6 +2710,7 @@
     let imported = 0;
     let skipped = 0;
     for (const tx of rows) {
+      normalizeTransactionInstrument(tx);
       const signature = transactionSignature(tx);
       if (existing.has(signature)) {
         skipped += 1;
@@ -1926,7 +2719,7 @@
       await hydrateTransactionPrice(tx);
       state.transactions.push(tx);
       existing.add(signature);
-      if (tx.symbol && tx.price > 0) state.prices[tx.symbol] = tx.price;
+      if (tx.symbol && tx.price > 0) setInstrumentPrice(tx.symbol, tx.type, tx.price);
       imported += 1;
     }
     if (!imported) {
@@ -1946,6 +2739,7 @@
       tx.time || "",
       tx.action || "",
       normalizeSymbol(tx.symbol || ""),
+      String(tx.type || "fund"),
       tx.inputMode || "",
       number(tx.quantity).toFixed(4),
       number(tx.price).toFixed(4),
@@ -1991,7 +2785,7 @@
     const symbol = button.dataset.symbol;
     const type = button.dataset.type || "fund";
     if (action === "detail") openInstrumentDetail(symbol, type);
-    if (action === "remove-watch") removeWatchlist(symbol);
+    if (action === "remove-watch") removeWatchlist(symbol, type);
   }
 
   function handleTransactionAction(event) {
@@ -2002,8 +2796,8 @@
     if (action === "detail") openInstrumentDetail(button.dataset.symbol, button.dataset.type || "fund");
   }
 
-  function removeWatchlist(symbol) {
-    state.watchlist = (state.watchlist || []).filter((item) => item.symbol !== symbol);
+  function removeWatchlist(symbol, type = "fund") {
+    state.watchlist = (state.watchlist || []).filter((item) => !sameInstrument(item.symbol, item.type, symbol, type));
     persist();
     render();
     showToast("已移除自选");
@@ -2057,16 +2851,23 @@
 
   async function openInstrumentDetail(symbol, type = "fund") {
     const portfolio = computePortfolio();
-    const holding = portfolio.holdings.find((item) => item.symbol === symbol)
-      || getWatchOnlyRows(new Set()).find((item) => item.symbol === symbol)
-      || { symbol, name: symbol, type, currency: "CNY", value: 0, pnl: 0, weight: 0, quantity: 0, price: 0 };
+    const normalizedType = normalizeInstrumentType(type, symbol, "");
+    const holding = portfolio.holdings.find((item) => sameInstrument(item.symbol, item.type, symbol, normalizedType))
+      || getWatchOnlyRows(new Set()).find((item) => sameInstrument(item.symbol, item.type, symbol, normalizedType))
+      || { symbol, name: symbol, type: normalizedType, currency: "CNY", value: 0, pnl: 0, weight: 0, quantity: 0, price: 0 };
     activeInstrumentDetail = {
       symbol: holding.symbol,
       type: holding.type || type,
       name: holding.name || symbol
     };
     els.instrumentTitle.textContent = `${holding.symbol} · ${holding.name}`;
-    els.instrumentChartTitle.textContent = `${instrumentRangeLabels.intraday}行情`;
+    updateInstrumentRangeLabels(activeInstrumentDetail.type);
+    els.instrumentChartTitle.textContent = `${getInstrumentRangeLabel("intraday", activeInstrumentDetail.type)}曲线`;
+    if (els.instrumentChartMeta) {
+      els.instrumentChartMeta.textContent = isMarketChartType(activeInstrumentDetail.type)
+        ? "股票/ETF 默认展示分时和 K 线；录入和详情都优先走东方财富行情。"
+        : "基金默认展示估值和净值趋势；数据源优先走东方财富基金净值。";
+    }
     els.instrumentSummary.innerHTML = [
       { label: "市值", value: holding.value ? money(holding.value) : "自选关注" },
       { label: "持有份额", value: holding.quantity ? formatNumber(holding.quantity) : "--" },
@@ -2078,7 +2879,7 @@
       </div>
     `).join("");
     els.instrumentTransactions.innerHTML = state.transactions
-      .filter((tx) => tx.symbol === symbol)
+      .filter((tx) => sameInstrument(tx.symbol, tx.type, symbol, activeInstrumentDetail.type))
       .slice()
       .reverse()
       .map((tx) => transactionRecordItem(tx, { compact: true }))
@@ -2087,7 +2888,15 @@
     els.backdrop.hidden = false;
     els.instrumentDrawer.classList.add("open");
     els.instrumentDrawer.setAttribute("aria-hidden", "false");
+    if (holding.type === "cash") {
+      renderInstrumentChartStats(null, "intraday", "现金不展示行情图");
+      showChartEmpty(els.instrumentTrendChart, "现金不展示行情曲线");
+      els.instrumentStatus.textContent = "无需行情";
+      setTimeout(resizeCharts, 120);
+      return;
+    }
     setInstrumentRange("intraday");
+    setTimeout(resizeCharts, 220);
     await loadInstrumentChart("intraday");
   }
 
@@ -2115,22 +2924,112 @@
     if (!activeInstrumentDetail) return;
     const requestId = ++instrumentChartRequestId;
     const { symbol, type, name } = activeInstrumentDetail;
-    const title = instrumentRangeLabels[range] || "行情";
+    const title = getInstrumentRangeLabel(range, type);
     els.instrumentChartTitle.textContent = `${title}曲线`;
+    if (els.instrumentChartMeta) {
+      els.instrumentChartMeta.textContent = isMarketChartType(type)
+        ? `数据源：${range === "intraday" ? "东方财富分时" : "东方财富 K 线"} · 口径：${range === "intraday" ? "昨收基准" : "复权 K 线"}`
+        : `数据源：东方财富基金净值 · 口径：${range === "intraday" ? "近期估值" : "净值趋势"}`;
+    }
     els.instrumentStatus.textContent = "查询中";
     try {
       const data = await fetchJson(`/api/chart/${encodeURIComponent(symbol)}?kind=${encodeURIComponent(type)}&range=${encodeURIComponent(range)}`);
       if (requestId !== instrumentChartRequestId) return;
       els.instrumentStatus.textContent = data.points?.length ? "已更新" : "暂无数据";
       if (data.name) els.instrumentTitle.textContent = `${data.code} · ${data.name}`;
-      renderInstrumentChartStats(data, range);
+      renderInstrumentChartStats(data, range, "", type);
+      renderInstrumentChartMeta(data, range, type);
+      renderInstrumentAxisHint(data, range, type);
       renderInstrumentChart(els.instrumentTrendChart, data, range, { emptyText: `${name} 暂无 ${title} 数据` });
     } catch (error) {
       if (requestId !== instrumentChartRequestId) return;
       els.instrumentStatus.textContent = "查询失败";
-      renderInstrumentChartStats(null, range, error.message || "查询失败");
+      renderInstrumentChartStats(null, range, error.message || "查询失败", type);
+      renderInstrumentChartMeta(null, range, type, error.message || "查询失败");
+      renderInstrumentAxisHint(null, range, type);
       renderInstrumentChart(els.instrumentTrendChart, { points: [], chartType: "line" }, range, { emptyText: error.message || "查询失败" });
     }
+  }
+
+  function renderInstrumentChartMeta(data, range, type, errorText = "") {
+    if (!els.instrumentChartMeta) return;
+    if (errorText) {
+      els.instrumentChartMeta.textContent = errorText;
+      return;
+    }
+    const source = data?.source || "";
+    const sourceText = {
+      "eastmoney-trends": "东方财富分时",
+      "eastmoney-kline": "东方财富 K 线",
+      "eastmoney-fund-recent-nav": "东方财富近期净值",
+      "eastmoney-fund-trend": "东方财富净值趋势",
+      "eastmoney-quote": "东方财富行情",
+      "eastmoney-fundgz": "天天基金估值"
+    }[source] || source || "未知来源";
+    const changePct = data?.stats?.changePct;
+    const latestDate = data?.stats?.latestDate ? formatChartLabelTime(data.stats.latestDate) : "--";
+    const extra = Number.isFinite(changePct) ? ` · 涨跌幅 ${changePct.toFixed(2)}%` : "";
+    const period = range === "intraday" ? "分时" : getInstrumentRangeLabel(range, type);
+    els.instrumentChartMeta.textContent = `${period} · ${sourceText}${extra} · 最新 ${latestDate}`;
+  }
+
+  function renderInstrumentAxisHint(data, range, type) {
+    if (!els.instrumentChartAxisHint) return;
+    const points = Array.isArray(data?.points) ? data.points : [];
+    if (!points.length) {
+      els.instrumentChartAxisHint.innerHTML = "";
+      return;
+    }
+    const labels = range === "intraday" && isMarketChartType(type)
+      ? ["09:30", "10:00", "10:30", "11:30/13:00", "14:00", "14:30", "15:00"]
+      : sampleAxisLabels(points, range, type);
+    els.instrumentChartAxisHint.style.gridTemplateColumns = `repeat(${Math.max(labels.length, 1)}, minmax(0, 1fr))`;
+    els.instrumentChartAxisHint.innerHTML = labels
+      .map((label) => `<span>${escapeHtml(label)}</span>`)
+      .join("");
+  }
+
+  function sampleAxisLabels(points, range, type) {
+    const rows = points
+      .map((point) => point.date || point.time || "")
+      .filter(Boolean);
+    if (!rows.length) return [];
+    const count = rows.length < 5 ? rows.length : 5;
+    const labels = [];
+    for (let index = 0; index < count; index += 1) {
+      const position = count === 1 ? 0 : Math.round(index * (rows.length - 1) / (count - 1));
+      const raw = rows[position];
+      labels.push(formatAxisLabel(raw, range, type));
+    }
+    return labels.filter((label, index, all) => label && all.indexOf(label) === index);
+  }
+
+  function formatAxisLabel(raw, range, type) {
+    const text = String(raw || "");
+    if (!text) return "";
+    if (range === "intraday" && isMarketChartType(type)) return text.slice(11, 16) || text;
+    if (range === "monthly") return text.slice(0, 7);
+    return formatChartLabelTime(text, { short: true });
+  }
+
+  function isFundLikeType(type) {
+    return type === "fund";
+  }
+
+  function isMarketChartType(type) {
+    return type === "stock" || type === "etf";
+  }
+
+  function getInstrumentRangeLabel(range, type) {
+    if (range === "intraday" && isFundLikeType(type)) return "估值";
+    return instrumentRangeLabels[range] || "行情";
+  }
+
+  function updateInstrumentRangeLabels(type) {
+    els.instrumentChartRanges.querySelectorAll("button[data-instrument-range]").forEach((button) => {
+      const range = button.dataset.instrumentRange || "daily";
+      button.textContent = getInstrumentRangeLabel(range, type);
+    });
   }
 
   async function handleSymbolInput() {
@@ -2144,7 +3043,12 @@
       return;
     }
 
-    if (/^\d{6}$/.test(symbol) || /^[A-Z.]{1,8}$/.test(symbol)) {
+    if (/^\d{6}$/.test(symbol)) {
+      await searchInstrumentCandidates(symbol);
+      return;
+    }
+
+    if (/^[A-Z.]{1,8}$/.test(symbol)) {
       await lookupInstrument(symbol);
       return;
     }
@@ -2176,13 +3080,14 @@
   }
 
   function renderSearchResults(results, errorText = "") {
-    if (!results.length) {
+    const rankedResults = rankSearchResults(results);
+    if (!rankedResults.length) {
       els.searchResults.hidden = false;
       els.searchResults.innerHTML = `<div class="search-result"><div><strong>${escapeHtml(errorText || "没有匹配结果")}</strong><span>换一个关键词或直接输入代码</span></div></div>`;
       return;
     }
     els.searchResults.hidden = false;
-    els.searchResults.innerHTML = results.map((item) => `
+    els.searchResults.innerHTML = rankedResults.map((item) => `
       <button class="search-result" type="button"
         data-code="${escapeHtml(item.code)}"
         data-name="${escapeHtml(item.name)}"
@@ -2195,6 +3100,25 @@
         <small>${escapeHtml(typeNames[item.type] || item.type || "")}</small>
       </button>
     `).join("");
+  }
+
+  function rankSearchResults(results) {
+    const desiredType = document.getElementById("txType")?.value || "";
+    const queryCode = normalizeImportSymbol(document.getElementById("txSymbol")?.value || document.getElementById("txName")?.value || "");
+    const typeScore = (type) => {
+      if (!desiredType || desiredType === "cash") return 0;
+      if (type === desiredType) return 30;
+      if (desiredType === "fund" && type === "etf") return 12;
+      if (desiredType === "etf" && type === "fund") return 8;
+      return 0;
+    };
+    return (results || []).slice().sort((left, right) => {
+      const leftExact = queryCode && left.code === queryCode ? 10 : 0;
+      const rightExact = queryCode && right.code === queryCode ? 10 : 0;
+      const scoreDiff = (typeScore(right.type) + rightExact) - (typeScore(left.type) + leftExact);
+      if (scoreDiff) return scoreDiff;
+      return String(left.name || left.code || "").localeCompare(String(right.name || right.code || ""), "zh-Hans-CN");
+    });
   }
 
   function hideSearchResults() {
@@ -2210,20 +3134,20 @@
     document.getElementById("txType").value = button.dataset.type || "fund";
     document.getElementById("txCurrency").value = button.dataset.currency || "CNY";
     hideSearchResults();
-    handleSymbolInput();
+    lookupInstrument(button.dataset.code || "");
   }
 
   async function lookupInstrument(code) {
-    const kind = document.getElementById("txType").value;
+    const kind = normalizeInstrumentType(document.getElementById("txType").value, code, document.getElementById("txName").value || "");
     const date = document.getElementById("txDate").value;
     const time = document.getElementById("txTime").value;
-    const cacheKey = `${kind}:${code}:${date || ""}:${time || ""}`;
+    const cacheKey = lookupCacheKey(code, kind, date, time);
     showLookupPanel("查询中", code, []);
     try {
       const cached = lookupBySymbol.get(cacheKey);
       const data = cached || await fetchJson(`/api/instrument/${encodeURIComponent(code)}?kind=${encodeURIComponent(kind)}&date=${encodeURIComponent(date || "")}&time=${encodeURIComponent(time || "")}`);
       lookupBySymbol.set(cacheKey, data);
-      lookupBySymbol.set(code, data);
+      cacheLookupData(data, code, kind);
       latestLookup = data;
       applyLookupToForm(data);
       renderLookup(data);
@@ -2251,13 +3175,13 @@
   }
 
   function renderLookup(data) {
-    const isFund = data.type === "fund" || data.type === "etf" || (data.trend || []).length > 0;
+    const isFund = data.type === "fund" || (data.type !== "etf" && (data.trend || []).length > 0);
     const stats = isFund
       ? [
-      { label: "买入日净值", value: Number.isFinite(data.priceOnDate) ? `${data.priceOnDate.toFixed(4)}${data.priceDate ? ` · ${data.priceDate}` : ""}` : "--" },
+          { label: "买入日净值", value: Number.isFinite(data.priceOnDate) ? `${data.priceOnDate.toFixed(4)}${data.priceDate ? ` · ${data.priceDate}` : ""}` : "--" },
           { label: "确认净值", value: Number.isFinite(data.nav) ? `${data.nav.toFixed(4)}${data.navDate ? ` · ${data.navDate}` : ""}` : "--" },
           { label: "估算净值", value: Number.isFinite(data.estimatedNav) ? data.estimatedNav.toFixed(4) : "--" },
-          { label: "估算涨跌", value: Number.isFinite(data.estimatedChangePct) ? `${data.estimatedChangePct.toFixed(2)}%` : "--", signed: data.estimatedChangePct }
+          { label: "估算涨跌幅", value: Number.isFinite(data.estimatedChangePct) ? `${data.estimatedChangePct.toFixed(2)}%` : "--", signed: data.estimatedChangePct }
         ]
       : [
           { label: "最新价", value: Number.isFinite(data.price) ? data.price.toFixed(2) : "--" },
@@ -2270,7 +3194,7 @@
     drawFundTrendChart(data.trend || []);
   }
 
-  function renderInstrumentChartStats(data, range, errorText = "") {
+  function renderInstrumentChartStats(data, range, errorText = "", type = activeInstrumentDetail?.type || "") {
     if (!els.instrumentChartStats) return;
     if (errorText) {
       els.instrumentChartStats.innerHTML = `<div class="lookup-stat"><span>状态</span><strong>${escapeHtml(errorText)}</strong></div>`;
@@ -2284,17 +3208,36 @@
     const open = data.stats?.open;
     const high = data.stats?.high;
     const low = data.stats?.low;
+    const previousClose = data.stats?.previousClose;
     const changePct = data.stats?.changePct;
     const change = Number.isFinite(data.stats?.change)
       ? data.stats.change
-      : Number.isFinite(latest) && Number.isFinite(open)
-        ? latest - open
-        : null;
+      : Number.isFinite(latest) && Number.isFinite(previousClose)
+        ? latest - previousClose
+        : Number.isFinite(latest) && Number.isFinite(open)
+          ? latest - open
+          : null;
+    const baselineLabel = range === "intraday" && Number.isFinite(previousClose) ? "昨收" : "开盘";
+    const baselineValue = range === "intraday" && Number.isFinite(previousClose) ? previousClose : open;
+    const latestDate = data.stats?.latestDate || "";
+    const volume = data.stats?.volume;
+    const amount = data.stats?.amount;
+    const average = data.stats?.average;
+    const fundLike = isFundLikeType(type || data.type);
+    const baseLabel = fundLike ? "区间起点" : baselineLabel;
+    const activityLabel = fundLike ? "样本点" : (range === "intraday" ? "均价" : "成交量");
+    const activityValue = fundLike
+      ? `${data.points.length} 个`
+      : (range === "intraday" && Number.isFinite(average) ? formatChartPrice(average) : formatCompactNumber(volume));
     const stats = [
       { label: "最新", value: Number.isFinite(latest) ? formatChartPrice(latest) : "--" },
-      { label: "涨跌", value: Number.isFinite(change) ? `${moneySigned(change)}${Number.isFinite(changePct) ? ` · ${percentSigned(changePct / 100)}` : ""}` : "--", signed: change },
+      { label: "涨跌幅", value: Number.isFinite(changePct) ? `${changePct.toFixed(2)}%` : "--", signed: changePct },
+      { label: "涨跌", value: Number.isFinite(change) ? signedChartPrice(change) : "--", signed: change },
+      { label: baseLabel, value: Number.isFinite(baselineValue) ? formatChartPrice(baselineValue) : "--" },
       { label: "最高", value: Number.isFinite(high) ? formatChartPrice(high) : "--" },
-      { label: "最低", value: Number.isFinite(low) ? formatChartPrice(low) : "--" }
+      { label: "最低", value: Number.isFinite(low) ? formatChartPrice(low) : "--" },
+      { label: activityLabel, value: activityValue },
+      { label: "时间", value: latestDate ? formatChartLabelTime(latestDate) : (Number.isFinite(amount) ? formatCompactNumber(amount) : "--") }
     ];
     els.instrumentChartStats.innerHTML = stats
       .map((stat) => `
@@ -2415,8 +3358,10 @@
     if (!container || !window.LightweightCharts) return;
     const points = Array.isArray(payload?.points) ? payload.points : [];
     const chartType = payload?.chartType || "line";
-    const size = getChartSize(container, 480);
+    const size = getChartSize(container, 560);
     const desiredType = chartType === "candlestick" ? "candlestick" : "line";
+    const timeScaleOptions = instrumentTimeScaleOptions(range);
+    const stats = payload?.stats || {};
 
     clearChartEmpty(container);
 
@@ -2427,16 +3372,7 @@
     if (!instrumentChartApi) {
       instrumentChartApi = LightweightCharts.createChart(container, {
         ...baseChartOptions(size.width, size.height),
-        timeScale: {
-          borderVisible: false,
-          timeVisible: range === "intraday",
-          secondsVisible: false,
-          rightOffset: 4,
-          barSpacing: range === "intraday" ? 4 : 8,
-          minBarSpacing: 2,
-          fixLeftEdge: true,
-          fixRightEdge: true
-        },
+        timeScale: timeScaleOptions,
         localization: {
           priceFormatter: (price) => formatChartPrice(price)
         }
@@ -2444,16 +3380,7 @@
     } else {
       instrumentChartApi.applyOptions({
         ...baseChartOptions(size.width, size.height),
-        timeScale: {
-          borderVisible: false,
-          timeVisible: range === "intraday",
-          secondsVisible: false,
-          rightOffset: 4,
-          barSpacing: range === "intraday" ? 4 : 8,
-          minBarSpacing: 2,
-          fixLeftEdge: true,
-          fixRightEdge: true
-        },
+        timeScale: timeScaleOptions,
         localization: {
           priceFormatter: (price) => formatChartPrice(price)
         }
@@ -2471,10 +3398,15 @@
         .filter((point) => [point.open, point.high, point.low, point.close].every(Number.isFinite))
         .map((point) => ({
           time: normalizeChartTime(point.date || point.time),
+          date: point.date || point.time || "",
           open: point.open,
           high: point.high,
           low: point.low,
-          close: point.close
+          close: point.close,
+          change: point.change,
+          changePct: point.changePct,
+          volume: point.volume,
+          amount: point.amount
         }));
       if (!candleData.length) {
         showChartEmpty(container, options.emptyText || "暂无 K 线数据");
@@ -2490,13 +3422,37 @@
           priceFormat: { type: "price", precision: 3, minMove: 0.001 }
         });
         instrumentSeriesApi = instrumentCandlesSeriesApi;
+        applySeriesAutoscale(instrumentCandlesSeriesApi);
       }
       instrumentCandlesSeriesApi.setData(candleData);
+      setInstrumentPriceLine(instrumentCandlesSeriesApi, Number.isFinite(stats.open) ? stats.open : stats.latest, range);
+      bindChartCrosshair(instrumentChartApi, {
+        container,
+        series: instrumentCandlesSeriesApi,
+        formatPrice: (value) => formatChartPrice(value),
+        formatTime: (time) => formatChartLabelTime(time),
+        formatExtra: (point) => point
+          ? [
+              `开 ${formatChartPrice(point.open)} · 高 ${formatChartPrice(point.high)} · 低 ${formatChartPrice(point.low)} · 收 ${formatChartPrice(point.close)}`,
+              Number.isFinite(point.changePct) ? `涨跌幅 ${point.changePct.toFixed(2)}%` : "",
+              Number.isFinite(point.volume) ? `量 ${formatCompactNumber(point.volume)}` : ""
+            ].filter(Boolean).join(" · ")
+          : "",
+        setCleanup: (cleanup) => { instrumentChartCrosshairCleanup = cleanup; },
+        getCleanup: () => instrumentChartCrosshairCleanup,
+        setLabel: (label) => { instrumentChartLabelApi = label; },
+        pointMap: buildPointMap(candleData)
+      });
     } else {
       const lineData = points
         .map((point) => ({
           time: normalizeChartTime(point.time || point.date),
-          value: number(point.value ?? point.close ?? point.open)
+          date: point.date || point.time || "",
+          value: number(point.value ?? point.close ?? point.open),
+          average: number(point.average),
+          high: number(point.high),
+          low: number(point.low),
+          changePct: point.changePct ?? point.equityReturn
         }))
         .filter((point) => point.time && Number.isFinite(point.value));
       if (!lineData.length) {
@@ -2513,25 +3469,86 @@
           priceFormat: { type: "price", precision: 3, minMove: 0.001 }
         });
         instrumentSeriesApi = instrumentAreaSeriesApi;
+        applySeriesAutoscale(instrumentAreaSeriesApi);
       }
       instrumentAreaSeriesApi.setData(lineData);
+      setInstrumentPriceLine(instrumentAreaSeriesApi, Number.isFinite(stats.previousClose) ? stats.previousClose : stats.open, range);
+      bindChartCrosshair(instrumentChartApi, {
+        container,
+        series: instrumentAreaSeriesApi,
+        formatPrice: (value) => formatChartPrice(value),
+        formatTime: (time) => formatChartLabelTime(time),
+        formatExtra: (point) => {
+          if (!point) return "";
+          const rows = [];
+          if (Number.isFinite(point.average) && point.average > 0) rows.push(`均 ${formatChartPrice(point.average)}`);
+          if (Number.isFinite(point.high) && point.high > 0) rows.push(`高 ${formatChartPrice(point.high)}`);
+          if (Number.isFinite(point.low) && point.low > 0) rows.push(`低 ${formatChartPrice(point.low)}`);
+          if (Number.isFinite(point.changePct)) rows.push(`涨跌 ${point.changePct.toFixed(2)}%`);
+          return rows.join(" · ");
+        },
+        setCleanup: (cleanup) => { instrumentChartCrosshairCleanup = cleanup; },
+        getCleanup: () => instrumentChartCrosshairCleanup,
+        setLabel: (label) => { instrumentChartLabelApi = label; },
+        pointMap: buildPointMap(lineData)
+      });
     }
 
     instrumentChartApi.timeScale().fitContent();
     currentInstrumentRange = range;
   }
 
+  function setInstrumentPriceLine(series, price, range) {
+    if (!series || typeof series.createPriceLine !== "function" || !Number.isFinite(price) || price <= 0) return;
+    const lineStyle = window.LightweightCharts?.LineStyle?.Dashed ?? 2;
+    if (series.__nanstarBaselineLine && typeof series.removePriceLine === "function") {
+      try {
+        series.removePriceLine(series.__nanstarBaselineLine);
+      } catch {
+        // Lightweight Charts may have already disposed the line during a series reset.
+      }
+    }
+    series.__nanstarBaselineLine = series.createPriceLine({
+      price,
+      color: "rgba(148, 163, 184, 0.72)",
+      lineWidth: 1,
+      lineStyle,
+      axisLabelVisible: true,
+      title: range === "intraday" ? "昨收/基准" : "基准"
+    });
+  }
+
+  function instrumentTimeScaleOptions(range) {
+    return {
+      borderVisible: false,
+      timeVisible: range === "intraday",
+      secondsVisible: false,
+      rightOffset: range === "intraday" ? 8 : 10,
+      barSpacing: range === "intraday" ? 3.6 : range === "monthly" ? 12 : range === "weekly" ? 10 : 8,
+      minBarSpacing: range === "intraday" ? 1.8 : 4,
+      fixLeftEdge: true,
+      fixRightEdge: true,
+      tickMarkFormatter: (time) => formatChartLabelTime(time, { short: true })
+    };
+  }
+
   function resetInstrumentChart() {
+    if (instrumentChartCrosshairCleanup) {
+      instrumentChartCrosshairCleanup();
+      instrumentChartCrosshairCleanup = null;
+    }
     if (instrumentChartApi) instrumentChartApi.remove();
     instrumentChartApi = null;
     instrumentSeriesApi = null;
     instrumentAreaSeriesApi = null;
     instrumentCandlesSeriesApi = null;
+    instrumentChartLabelApi = null;
     currentInstrumentChartType = null;
   }
 
   function showChartEmpty(container, message) {
     resetInstrumentChart();
+    container.innerHTML = "";
     container.innerHTML = `<div class="chart-empty">${escapeHtml(message)}</div>`;
   }
 
@@ -2583,12 +3600,28 @@
   }
 
   function formatChartPrice(value) {
-    const num = number(value);
+    const num = Number(value);
     if (!Number.isFinite(num)) return "--";
     if (Math.abs(num) >= 1000) return num.toFixed(0);
     if (Math.abs(num) >= 100) return num.toFixed(2);
     if (Math.abs(num) >= 10) return num.toFixed(2);
     return num.toFixed(3);
+  }
+
+  function signedChartPrice(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "--";
+    const sign = num >= 0 ? "+" : "-";
+    return `${sign}${formatChartPrice(Math.abs(num))}`;
+  }
+
+  function formatCompactNumber(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "--";
+    const abs = Math.abs(num);
+    if (abs >= 100000000) return `${(num / 100000000).toFixed(2)}亿`;
+    if (abs >= 10000) return `${(num / 10000).toFixed(2)}万`;
+    return formatNumber(num);
   }
 
   function formatChartLabel(point) {
@@ -2630,8 +3663,11 @@
       currency: String(formData.get("currency")),
       note: String(formData.get("note")).trim()
     };
+    normalizeTransactionInstrument(tx);
     await hydrateTransactionPrice(tx);
-    const matchedLookup = latestLookup?.code === tx.symbol ? latestLookup : lookupBySymbol.get(tx.symbol);
+    const matchedLookup = sameInstrument(latestLookup?.code, latestLookup?.type, tx.symbol, tx.type)
+      ? latestLookup
+      : lookupBySymbol.get(instrumentKey(tx.symbol, tx.type));
 
     if (mode === "watchlist") {
       addWatchlistItem(tx, matchedLookup);
@@ -2646,14 +3682,16 @@
     if (editIndex >= 0) state.transactions[editIndex] = tx;
     else state.transactions.push(tx);
 
-    state.prices[tx.symbol] = Number.isFinite(matchedLookup?.nav)
+    const nextPrice = Number.isFinite(matchedLookup?.nav)
       ? matchedLookup.nav
       : Number.isFinite(matchedLookup?.estimatedNav)
         ? matchedLookup.estimatedNav
         : tx.price;
-    state.dayChangePct[tx.symbol] = Number.isFinite(matchedLookup?.estimatedChangePct)
+    setInstrumentPrice(tx.symbol, tx.type, nextPrice);
+    const nextChange = Number.isFinite(matchedLookup?.estimatedChangePct)
       ? matchedLookup.estimatedChangePct / 100
-      : (state.dayChangePct[tx.symbol] || 0);
+      : (legacyDayChangeValue(tx.symbol, tx.type) || 0);
+    setInstrumentDayChange(tx.symbol, tx.type, nextChange);
     persist();
     resetTransactionForm();
     closeDrawer();
@@ -2671,8 +3709,10 @@
     try {
       const data = await fetchJson(`/api/instrument/${encodeURIComponent(tx.symbol)}?kind=${encodeURIComponent(tx.type)}&date=${encodeURIComponent(tx.date || "")}&time=${encodeURIComponent(tx.time || "")}`);
       latestLookup = data;
+      cacheLookupData(data, tx.symbol, tx.type);
       if (Number.isFinite(data.priceOnDate)) tx.price = data.priceOnDate;
       else if (Number.isFinite(data.nav)) tx.price = data.nav;
+      else if (Number.isFinite(data.estimatedNav)) tx.price = data.estimatedNav;
     } catch {
       // Keep the manually entered price when historical lookup is unavailable.
     }
@@ -2688,10 +3728,10 @@
     };
     state.watchlist = (state.watchlist || []).filter((existing) => existing.symbol !== item.symbol);
     state.watchlist.push(item);
-    if (Number.isFinite(lookup?.nav)) state.prices[item.symbol] = lookup.nav;
-    else if (Number.isFinite(lookup?.estimatedNav)) state.prices[item.symbol] = lookup.estimatedNav;
-    else if (Number.isFinite(lookup?.price)) state.prices[item.symbol] = lookup.price;
-    if (Number.isFinite(lookup?.estimatedChangePct)) state.dayChangePct[item.symbol] = lookup.estimatedChangePct / 100;
+    if (Number.isFinite(lookup?.nav)) setInstrumentPrice(item.symbol, item.type, lookup.nav);
+    else if (Number.isFinite(lookup?.estimatedNav)) setInstrumentPrice(item.symbol, item.type, lookup.estimatedNav);
+    else if (Number.isFinite(lookup?.price)) setInstrumentPrice(item.symbol, item.type, lookup.price);
+    if (Number.isFinite(lookup?.estimatedChangePct)) setInstrumentDayChange(item.symbol, item.type, lookup.estimatedChangePct / 100);
     persist();
   }
 
