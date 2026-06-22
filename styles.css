@@ -801,6 +801,40 @@ td {
   margin-bottom: 12px;
 }
 
+.brokerage-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.brokerage-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.brokerage-positions {
+  min-width: 0;
+}
+
+.brokerage-empty {
+  padding: 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+.brokerage-table {
+  min-width: 760px;
+}
+
+.brokerage-table td small {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .summary-tile {
   display: grid;
   gap: 5px;

@@ -1,0 +1,13 @@
+{
+  "account_id": "",
+  "account_type": "STOCK",
+  "cloud_state_url": "https://nanstar-wealth.pages.dev/api/state",
+  "sync_token": "",
+  "poll_seconds": 60,
+  "dry_run": true,
+  "push_transactions": true,
+  "push_snapshots": true,
+  "update_prices_from_positions": true,
+  "max_orders": 100,
+  "max_deals": 300
+}

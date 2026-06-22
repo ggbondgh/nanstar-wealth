@@ -52,7 +52,8 @@
       prices: {},
       dayChangePct: {},
       watchlist: [],
-      transactions: []
+      transactions: [],
+      brokerage: null
     };
   }
 
@@ -139,6 +140,8 @@
     wealthChartSummary: document.getElementById("wealthChartSummary"),
     allocationChart: document.getElementById("allocationChart"),
     allocationLegend: document.getElementById("allocationLegend"),
+    brokerageSummary: document.getElementById("brokerageSummary"),
+    brokeragePositions: document.getElementById("brokeragePositions"),
     topHoldingsBody: document.getElementById("topHoldingsBody"),
     holdingsBody: document.getElementById("holdingsBody"),
     transactionsBody: document.getElementById("transactionsBody"),
@@ -296,6 +299,7 @@
     document.getElementById("txInputMode").addEventListener("change", updateInputModeLabels);
     els.holdingsBody.addEventListener("click", handleHoldingsAction);
     els.topHoldingsBody.addEventListener("click", handleHoldingsAction);
+    if (els.brokeragePositions) els.brokeragePositions.addEventListener("click", handleHoldingsAction);
     els.transactionsBody.addEventListener("click", handleTransactionAction);
     els.transactionRecordList.addEventListener("click", handleTransactionAction);
     els.transactionFilters.addEventListener("click", handleTransactionFilterClick);
@@ -395,7 +399,20 @@
       const remoteUpdatedAt = data.updatedAt || "";
       const meta = getSyncMeta();
 
-      if (options.forcePush || (!remoteState && localStateSource === "stored")) {
+      if (options.forcePush) {
+        if (remoteState) {
+          const merged = mergeCloudState(remoteState);
+          replaceState(merged);
+          ensureStateShape();
+          persist({ sync: false });
+          render();
+        }
+        await pushCloudState();
+        updateSyncStatus("已同步", remoteUpdatedAt || getSyncMeta().remoteUpdatedAt || "");
+        return;
+      }
+
+      if (!remoteState && localStateSource === "stored") {
         await pushCloudState();
         updateSyncStatus("已同步", remoteUpdatedAt || getSyncMeta().remoteUpdatedAt || "");
         return;
@@ -432,7 +449,16 @@
     merged.dayChangePct = { ...(remote.dayChangePct || {}), ...(merged.dayChangePct || {}) };
     merged.watchlist = mergeBySymbol(remote.watchlist || [], merged.watchlist || []);
     merged.transactions = mergeById(remote.transactions || [], merged.transactions || []);
+    merged.brokerage = pickNewestBrokerage(remote.brokerage, merged.brokerage);
     return merged;
+  }
+
+  function pickNewestBrokerage(remote, local) {
+    if (!remote) return local || null;
+    if (!local) return remote;
+    const remoteTime = Date.parse(remote.updatedAt || "") || 0;
+    const localTime = Date.parse(local.updatedAt || "") || 0;
+    return remoteTime >= localTime ? remote : local;
   }
 
   function mergeBySymbol(a, b) {
@@ -578,6 +604,7 @@
     if (!state.prices) state.prices = {};
     if (!state.dayChangePct) state.dayChangePct = {};
     if (!Array.isArray(state.transactions)) state.transactions = [];
+    if (!state.brokerage || typeof state.brokerage !== "object" || Array.isArray(state.brokerage)) state.brokerage = null;
     let migrated = false;
     if (removeDemoSeedData()) migrated = true;
     state.transactions.forEach((tx) => {
@@ -823,6 +850,7 @@
     renderHoldings(portfolio);
     renderTransactions();
     renderRecent();
+    renderBrokerage();
     renderAnalysis(portfolio);
     renderRisk(portfolio);
     renderNotes();
@@ -1155,6 +1183,117 @@
         `;
       })
       .join("");
+  }
+
+  function renderBrokerage() {
+    if (!els.brokerageSummary || !els.brokeragePositions) return;
+    const brokerage = state.brokerage;
+    if (!brokerage) {
+      els.brokerageSummary.innerHTML = `
+        <article class="summary-tile">
+          <span>Status</span>
+          <strong>Not connected</strong>
+        </article>
+        <article class="summary-tile">
+          <span>Bridge</span>
+          <strong>Local only</strong>
+        </article>
+        <article class="summary-tile">
+          <span>Provider</span>
+          <strong>Guosen</strong>
+        </article>
+        <article class="summary-tile">
+          <span>Snapshot</span>
+          <strong>--</strong>
+        </article>
+      `;
+      els.brokeragePositions.innerHTML = `<div class="brokerage-empty">Run tools/guosen-sync locally to show account, position, order, and deal snapshots here.</div>`;
+      return;
+    }
+
+    const accounts = Array.isArray(brokerage.accounts) ? brokerage.accounts : [];
+    const positions = Array.isArray(brokerage.positions) ? brokerage.positions : [];
+    const orders = Array.isArray(brokerage.orders) ? brokerage.orders : [];
+    const deals = Array.isArray(brokerage.deals) ? brokerage.deals : [];
+    const account = accounts[0] || {};
+    const totalAsset = firstFinite(account.totalAsset, account.marketValue + account.cashBalance);
+    const availableCash = firstFinite(account.availableCash, account.cashBalance, 0);
+    const marketValue = firstFinite(account.marketValue, positions.reduce((sum, item) => sum + number(item.marketValue), 0));
+    const updatedAt = formatSnapshotTime(brokerage.updatedAt);
+
+    els.brokerageSummary.innerHTML = [
+      { label: "Account", value: brokerage.accountIdMasked || "--" },
+      { label: "Total asset", value: Number.isFinite(totalAsset) ? money(totalAsset) : "--" },
+      { label: "Available cash", value: Number.isFinite(availableCash) ? money(availableCash) : "--" },
+      { label: "Market value", value: Number.isFinite(marketValue) ? money(marketValue) : "--" },
+      { label: "Positions", value: String(positions.length) },
+      { label: "Orders / Deals", value: `${orders.length} / ${deals.length}` },
+      { label: "Updated", value: updatedAt || "--" },
+      { label: "Source", value: brokerage.source || brokerage.provider || "local-bridge" }
+    ].map((item) => `
+      <article class="summary-tile">
+        <span>${escapeHtml(item.label)}</span>
+        <strong>${escapeHtml(item.value)}</strong>
+      </article>
+    `).join("");
+
+    els.brokeragePositions.innerHTML = positions.length
+      ? `
+        <div class="table-wrap">
+          <table class="brokerage-table">
+            <thead>
+              <tr>
+                <th>Code / Name</th>
+                <th>Type</th>
+                <th>Quantity</th>
+                <th>Cost</th>
+                <th>Last</th>
+                <th>Market Value</th>
+                <th>P/L</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${positions.slice(0, 8).map((item) => `
+                <tr>
+                  <td>
+                    <button class="symbol-cell symbol-link" type="button" data-action="detail" data-symbol="${escapeHtml(item.symbol)}" data-type="${escapeHtml(item.type)}">
+                      <strong>${escapeHtml(item.symbol || "--")}</strong>
+                      <span>${escapeHtml(item.name || "")}</span>
+                    </button>
+                  </td>
+                  <td>${escapeHtml(typeNames[item.type] || item.type || "--")}</td>
+                  <td>${formatNumber(item.quantity)}</td>
+                  <td>${optionalMoney(item.costPrice)}</td>
+                  <td>${optionalMoney(item.lastPrice)}</td>
+                  <td>${optionalMoney(item.marketValue)}</td>
+                  <td>${colorText(number(item.pnl), moneySigned(number(item.pnl)))} ${item.pnlRate === undefined ? "" : `<small>${escapeHtml(percent(item.pnlRate))}</small>`}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `
+      : `<div class="brokerage-empty">No Guosen positions in the latest snapshot.</div>`;
+  }
+
+  function firstFinite(...values) {
+    for (const value of values) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return NaN;
+  }
+
+  function optionalMoney(value, currency = "CNY") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? money(parsed, currency) : "--";
+  }
+
+  function formatSnapshotTime(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString("zh-CN", { hour12: false });
   }
 
   function renderRisk(portfolio) {
