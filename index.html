@@ -351,7 +351,7 @@
           <input id="importFileInput" type="file" accept=".xls,.xlsx,.csv" />
           <div class="import-preview" id="importPreview">选择同花顺导出的文件或文本后会显示解析预览。</div>
           <div class="drawer-actions">
-            <button class="ghost-button" id="parseImportFileButton" type="button">解析文件</button>
+            <button class="ghost-button" id="parseImportFileButton" type="button">重新解析</button>
             <button class="primary-button" id="applyImportFileButton" type="button" disabled>导入文件</button>
           </div>
         </section>
@@ -365,7 +365,8 @@
           </div>
           <textarea id="importTextInput" rows="8" placeholder="粘贴同花顺导出的表格文本，或手工整理后的交易流水"></textarea>
           <div class="drawer-actions">
-            <button class="ghost-button" id="parseImportTextButton" type="button">解析文本</button>
+            <button class="ghost-button" id="parseImportTextButton" type="button">重新解析</button>
+            <button class="ghost-button" id="pasteImportTextButton" type="button">粘贴剪贴板</button>
             <button class="primary-button" id="applyImportTextButton" type="button" disabled>导入文本</button>
           </div>
         </section>

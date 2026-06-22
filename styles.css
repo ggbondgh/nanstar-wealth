@@ -500,10 +500,10 @@ canvas {
   left: 0;
   z-index: 4;
   display: grid;
-  gap: 3px;
-  min-width: 148px;
-  max-width: min(240px, calc(100% - 24px));
-  padding: 8px 10px;
+  gap: 4px;
+  min-width: 168px;
+  max-width: min(280px, calc(100% - 24px));
+  padding: 10px 12px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   color: var(--text);
@@ -519,14 +519,15 @@ canvas {
 
 .chart-tooltip span,
 .chart-tooltip small {
-  color: var(--muted);
+  color: var(--soft);
   font-size: 11px;
   font-weight: 800;
 }
 
 .chart-tooltip strong {
   font-family: var(--font-mono);
-  font-size: 15px;
+  font-size: 16px;
+  line-height: 1.1;
 }
 
 .chart-empty {
@@ -1337,12 +1338,14 @@ textarea:focus {
 
 .chart-axis-hint {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: -4px;
-  color: var(--muted);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+  padding: 0 6px;
+  color: var(--soft);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .chart-axis-hint:empty {
@@ -1408,8 +1411,8 @@ textarea:focus {
 
 #instrumentTrendChart {
   width: 100%;
-  height: clamp(320px, 48vh, 620px);
-  min-height: 320px;
+  height: clamp(360px, 50vh, 660px);
+  min-height: 360px;
 }
 
 .detail-summary {

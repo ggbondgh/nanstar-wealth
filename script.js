@@ -261,6 +261,7 @@
     document.getElementById("parseImportFileButton").addEventListener("click", parseImportFile);
     document.getElementById("applyImportFileButton").addEventListener("click", applyImportPreview);
     document.getElementById("parseImportTextButton").addEventListener("click", parseImportText);
+    document.getElementById("pasteImportTextButton").addEventListener("click", pasteImportText);
     document.getElementById("applyImportTextButton").addEventListener("click", applyImportPreview);
     document.getElementById("ocrImportButton").addEventListener("click", handleOcrImportPlaceholder);
     document.getElementById("syncTokenButton").addEventListener("click", configureSyncToken);
@@ -284,6 +285,9 @@
     document.getElementById("txName").addEventListener("input", debounce(handleNameSearchInput, 420));
     document.getElementById("txDate").addEventListener("change", handleSymbolInput);
     document.getElementById("txTime").addEventListener("change", handleSymbolInput);
+    document.getElementById("importFileInput").addEventListener("change", () => {
+      if (document.getElementById("importFileInput").files?.length) parseImportFile();
+    });
     document.getElementById("txType").addEventListener("change", () => {
       updateInputModeLabels();
       handleSymbolInput();
@@ -1893,7 +1897,7 @@
     const rect = container.getBoundingClientRect();
     const box = label.getBoundingClientRect();
     const width = box.width || 190;
-    const height = box.height || 78;
+    const height = box.height || 92;
     const x = Math.min(Math.max(point.x + 14, 12), Math.max(12, rect.width - width - 12));
     const y = Math.min(Math.max(point.y + 14, 12), Math.max(12, rect.height - height - 12));
     label.style.transform = `translate(${x}px, ${y}px)`;
@@ -1912,6 +1916,63 @@
     if (!mapped) return seriesPoint || null;
     if (!seriesPoint) return mapped;
     return { ...mapped, ...seriesPoint };
+  }
+
+  function formatSignedPercent(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return "--";
+    return `${num >= 0 ? "+" : ""}${num.toFixed(2)}%`;
+  }
+
+  function buildInstrumentHoverSummary(point, options = {}) {
+    if (!point) return "";
+    const chartType = options.chartType || "line";
+    const range = options.range || "daily";
+    const stats = options.stats || {};
+    const rows = [];
+    const amount = number(point.amount);
+    const volume = number(point.volume);
+
+    if (chartType === "candlestick") {
+      const change = Number.isFinite(point.change)
+        ? point.change
+        : (Number.isFinite(point.close) && Number.isFinite(point.open) ? point.close - point.open : null);
+      const changePct = Number.isFinite(point.changePct)
+        ? point.changePct
+        : (Number.isFinite(change) && Number.isFinite(point.open) && point.open ? (change / point.open) * 100 : null);
+      if (Number.isFinite(point.open)) rows.push(`开 ${formatChartPrice(point.open)}`);
+      if (Number.isFinite(point.high)) rows.push(`高 ${formatChartPrice(point.high)}`);
+      if (Number.isFinite(point.low)) rows.push(`低 ${formatChartPrice(point.low)}`);
+      if (Number.isFinite(point.close)) rows.push(`收 ${formatChartPrice(point.close)}`);
+      if (Number.isFinite(change)) rows.push(`涨跌 ${signedChartPrice(change)}`);
+      if (Number.isFinite(changePct)) rows.push(`涨跌幅 ${formatSignedPercent(changePct)}`);
+      if (Number.isFinite(volume)) rows.push(`量 ${formatCompactNumber(volume)}`);
+      if (Number.isFinite(amount)) rows.push(`额 ${formatCompactNumber(amount)}`);
+      return rows.join(" · ");
+    }
+
+    const value = number(point.value ?? point.close ?? point.open);
+    const baseline = Number.isFinite(point.previousClose)
+      ? point.previousClose
+      : (range === "intraday"
+        ? (Number.isFinite(stats.previousClose) ? stats.previousClose : stats.open)
+        : stats.open);
+    const change = Number.isFinite(point.change)
+      ? point.change
+      : (Number.isFinite(value) && Number.isFinite(baseline) ? value - baseline : null);
+    const changePct = Number.isFinite(point.changePct)
+      ? point.changePct
+      : (Number.isFinite(change) && Number.isFinite(baseline) && baseline ? (change / baseline) * 100 : null);
+
+    if (Number.isFinite(change)) rows.push(`涨跌 ${signedChartPrice(change)}`);
+    if (Number.isFinite(changePct)) rows.push(`涨跌幅 ${formatSignedPercent(changePct)}`);
+    if (Number.isFinite(baseline)) rows.push(range === "intraday" ? `昨收 ${formatChartPrice(baseline)}` : `开盘 ${formatChartPrice(baseline)}`);
+    if (Number.isFinite(point.average)) rows.push(`均价 ${formatChartPrice(point.average)}`);
+    if (Number.isFinite(point.high)) rows.push(`高 ${formatChartPrice(point.high)}`);
+    if (Number.isFinite(point.low)) rows.push(`低 ${formatChartPrice(point.low)}`);
+    if (Number.isFinite(volume)) rows.push(`量 ${formatCompactNumber(volume)}`);
+    if (Number.isFinite(amount)) rows.push(`额 ${formatCompactNumber(amount)}`);
+    return rows.join(" · ");
   }
 
   function chartTimeKey(value) {
@@ -2107,6 +2168,8 @@
       setImportPreview(best.rows, best.label);
     } catch (error) {
       showImportPreview([], error.message || "文件解析失败");
+    } finally {
+      input.value = "";
     }
   }
 
@@ -2117,6 +2180,21 @@
       return;
     }
     setImportPreview(extractImportRowsFromText(text), "文本粘贴");
+  }
+
+  async function pasteImportText() {
+    try {
+      const text = await navigator.clipboard.readText();
+      const normalized = String(text || "").trim();
+      if (!normalized) {
+        showToast("剪贴板里没有可识别的文本");
+        return;
+      }
+      document.getElementById("importTextInput").value = normalized;
+      setImportPreview(extractImportRowsFromText(normalized), "剪贴板");
+    } catch (error) {
+      showToast(error.message || "读取剪贴板失败");
+    }
   }
 
   async function handleOcrImportPlaceholder() {
@@ -3431,13 +3509,7 @@
         series: instrumentCandlesSeriesApi,
         formatPrice: (value) => formatChartPrice(value),
         formatTime: (time) => formatChartLabelTime(time),
-        formatExtra: (point) => point
-          ? [
-              `开 ${formatChartPrice(point.open)} · 高 ${formatChartPrice(point.high)} · 低 ${formatChartPrice(point.low)} · 收 ${formatChartPrice(point.close)}`,
-              Number.isFinite(point.changePct) ? `涨跌幅 ${point.changePct.toFixed(2)}%` : "",
-              Number.isFinite(point.volume) ? `量 ${formatCompactNumber(point.volume)}` : ""
-            ].filter(Boolean).join(" · ")
-          : "",
+        formatExtra: (point) => buildInstrumentHoverSummary(point, { chartType: "candlestick", range, stats }),
         setCleanup: (cleanup) => { instrumentChartCrosshairCleanup = cleanup; },
         getCleanup: () => instrumentChartCrosshairCleanup,
         setLabel: (label) => { instrumentChartLabelApi = label; },
@@ -3478,15 +3550,7 @@
         series: instrumentAreaSeriesApi,
         formatPrice: (value) => formatChartPrice(value),
         formatTime: (time) => formatChartLabelTime(time),
-        formatExtra: (point) => {
-          if (!point) return "";
-          const rows = [];
-          if (Number.isFinite(point.average) && point.average > 0) rows.push(`均 ${formatChartPrice(point.average)}`);
-          if (Number.isFinite(point.high) && point.high > 0) rows.push(`高 ${formatChartPrice(point.high)}`);
-          if (Number.isFinite(point.low) && point.low > 0) rows.push(`低 ${formatChartPrice(point.low)}`);
-          if (Number.isFinite(point.changePct)) rows.push(`涨跌 ${point.changePct.toFixed(2)}%`);
-          return rows.join(" · ");
-        },
+        formatExtra: (point) => buildInstrumentHoverSummary(point, { chartType: "line", range, stats }),
         setCleanup: (cleanup) => { instrumentChartCrosshairCleanup = cleanup; },
         getCleanup: () => instrumentChartCrosshairCleanup,
         setLabel: (label) => { instrumentChartLabelApi = label; },
