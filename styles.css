@@ -1109,6 +1109,7 @@ td {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   width: min(1560px, calc(100vw - 20px));
+  height: calc(100vh - 24px);
   max-height: calc(100vh - 24px);
   padding: 20px;
   border: 1px solid var(--line);
@@ -1120,7 +1121,7 @@ td {
   pointer-events: none;
   transform: translate(-50%, 16px) scale(0.98);
   transition: transform 180ms ease, opacity 180ms ease, visibility 180ms ease;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .modal.open {
@@ -1135,13 +1136,18 @@ td {
   grid-template-columns: minmax(0, 1fr) clamp(320px, 26vw, 420px);
   grid-template-rows: auto minmax(0, 1fr);
   gap: 14px;
+  height: 100%;
   min-height: 0;
   overflow: hidden;
 }
 
 .detail-chart-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   grid-column: 1;
   grid-row: 2;
+  height: 100%;
   min-height: 0;
   margin-top: 0;
   overflow: hidden;
@@ -1340,12 +1346,13 @@ textarea:focus {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 6px;
-  margin-top: 8px;
+  margin-top: 0;
   padding: 0 6px;
   color: var(--soft);
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.2;
+  flex: 0 0 auto;
 }
 
 .chart-axis-hint:empty {
@@ -1411,8 +1418,9 @@ textarea:focus {
 
 #instrumentTrendChart {
   width: 100%;
-  height: clamp(360px, 50vh, 660px);
-  min-height: 360px;
+  flex: 1 1 auto;
+  min-height: 280px;
+  height: clamp(280px, 34vh, 440px);
 }
 
 .detail-summary {
