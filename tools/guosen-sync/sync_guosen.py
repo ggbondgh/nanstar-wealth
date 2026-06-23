@@ -7,8 +7,6 @@ The script is intentionally conservative:
 - GET current Cloudflare state, merge, then PUT the full merged state
 """
 
-from __future__ import annotations
-
 import argparse
 import builtins
 import copy
@@ -20,12 +18,12 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 DEFAULT_CONFIG = {
     "account_id": "",
-    "account_type": "STOCK",
+    "account_type": "stock",
     "cloud_state_url": "https://nanstar-wealth.pages.dev/api/state",
     "sync_token": "",
     "poll_seconds": 60,
@@ -77,7 +75,7 @@ def main() -> int:
         time.sleep(poll_seconds)
 
 
-def load_config(path: Path) -> dict[str, Any]:
+def load_config(path: Path) -> Dict[str, Any]:
     config = copy.deepcopy(DEFAULT_CONFIG)
     if path.exists():
         with path.open("r", encoding="utf-8") as handle:
@@ -89,7 +87,7 @@ def load_config(path: Path) -> dict[str, Any]:
         print(f"[guosen-sync] config not found, using defaults: {path}", file=sys.stderr)
 
     config["account_id"] = str(config.get("account_id") or "").strip()
-    config["account_type"] = str(config.get("account_type") or "STOCK").strip() or "STOCK"
+    config["account_type"] = str(config.get("account_type") or "stock").strip() or "stock"
     config["cloud_state_url"] = str(config.get("cloud_state_url") or "").strip()
     config["sync_token"] = str(config.get("sync_token") or "").strip()
 
@@ -102,7 +100,7 @@ def load_config(path: Path) -> dict[str, Any]:
     return config
 
 
-def sync_once(config: dict[str, Any], sample_path: str | None = None, write_state: str | None = None) -> dict[str, Any]:
+def sync_once(config: Dict[str, Any], sample_path: Optional[str] = None, write_state: Optional[str] = None) -> Dict[str, Any]:
     snapshot = load_sample_snapshot(Path(sample_path)) if sample_path else fetch_guosen_snapshot(config)
     current_state, remote_updated_at = fetch_cloud_state(config)
     merged_state, merge_summary = merge_state(current_state, snapshot, config)
@@ -125,12 +123,12 @@ def sync_once(config: dict[str, Any], sample_path: str | None = None, write_stat
     }
 
 
-def fetch_guosen_snapshot(config: dict[str, Any]) -> dict[str, Any]:
+def fetch_guosen_snapshot(config: Dict[str, Any]) -> Dict[str, Any]:
     get_trade_detail_data = find_guosen_trade_function()
     account_id = config["account_id"]
     account_type = config["account_type"]
 
-    def query(kind: str) -> list[Any]:
+    def query(kind: str) -> List[Any]:
         try:
             data = get_trade_detail_data(account_id, account_type, kind)
         except TypeError:
@@ -180,7 +178,7 @@ def find_guosen_trade_function() -> Callable[..., Any]:
     )
 
 
-def load_sample_snapshot(path: Path) -> dict[str, Any]:
+def load_sample_snapshot(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
     if not isinstance(data, dict):
@@ -190,7 +188,7 @@ def load_sample_snapshot(path: Path) -> dict[str, Any]:
     return data
 
 
-def fetch_cloud_state(config: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+def fetch_cloud_state(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
     request = urllib.request.Request(
         config["cloud_state_url"],
         headers={"x-nanstar-sync-token": config["sync_token"], "Accept": "application/json"},
@@ -205,7 +203,7 @@ def fetch_cloud_state(config: dict[str, Any]) -> tuple[dict[str, Any], str | Non
     return ensure_state(state), data.get("updatedAt")
 
 
-def push_cloud_state(config: dict[str, Any], state: dict[str, Any]) -> str | None:
+def push_cloud_state(config: Dict[str, Any], state: Dict[str, Any]) -> Optional[str]:
     payload = json.dumps({"state": state}, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         config["cloud_state_url"],
@@ -232,10 +230,10 @@ def request_json(request: urllib.request.Request) -> Any:
         raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
 
 
-def merge_state(current_state: dict[str, Any], snapshot: dict[str, Any], config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def merge_state(current_state: Dict[str, Any], snapshot: Dict[str, Any], config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     state = ensure_state(copy.deepcopy(current_state))
     account_id = str(snapshot.get("accountId") or config.get("account_id") or "")
-    account_type = str(snapshot.get("accountType") or config.get("account_type") or "STOCK")
+    account_type = str(snapshot.get("accountType") or config.get("account_type") or "stock")
     fetched_at = str(snapshot.get("fetchedAt") or now_iso())
     max_orders = int(config.get("max_orders") or 100)
     max_deals = int(config.get("max_deals") or 300)
@@ -303,7 +301,7 @@ def merge_state(current_state: dict[str, Any], snapshot: dict[str, Any], config:
     }
 
 
-def ensure_state(state: dict[str, Any]) -> dict[str, Any]:
+def ensure_state(state: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(state.get("prices"), dict):
         state["prices"] = {}
     if not isinstance(state.get("dayChangePct"), dict):
@@ -317,7 +315,7 @@ def ensure_state(state: dict[str, Any]) -> dict[str, Any]:
     return state
 
 
-def normalize_account(row: Any) -> dict[str, Any]:
+def normalize_account(row: Any) -> Dict[str, Any]:
     source = to_record(row)
     return compact_dict(
         {
@@ -332,7 +330,7 @@ def normalize_account(row: Any) -> dict[str, Any]:
     )
 
 
-def normalize_position(row: Any) -> dict[str, Any]:
+def normalize_position(row: Any) -> Dict[str, Any]:
     source = to_record(row)
     symbol = normalize_symbol(field_text(source, SYMBOL_KEYS))
     name = field_text(source, NAME_KEYS)
@@ -360,7 +358,7 @@ def normalize_position(row: Any) -> dict[str, Any]:
     )
 
 
-def normalize_order(row: Any) -> dict[str, Any]:
+def normalize_order(row: Any) -> Dict[str, Any]:
     source = to_record(row)
     symbol = normalize_symbol(field_text(source, SYMBOL_KEYS))
     name = field_text(source, NAME_KEYS)
@@ -382,7 +380,7 @@ def normalize_order(row: Any) -> dict[str, Any]:
     )
 
 
-def normalize_deal(row: Any) -> dict[str, Any]:
+def normalize_deal(row: Any) -> Dict[str, Any]:
     source = to_record(row)
     symbol = normalize_symbol(field_text(source, SYMBOL_KEYS))
     name = field_text(source, NAME_KEYS)
@@ -409,7 +407,7 @@ def normalize_deal(row: Any) -> dict[str, Any]:
     )
 
 
-def deal_to_transaction(deal: dict[str, Any], account_id: str) -> dict[str, Any] | None:
+def deal_to_transaction(deal: Dict[str, Any], account_id: str) -> Optional[Dict[str, Any]]:
     action = deal.get("action")
     if action not in {"buy", "sell", "dividend", "deposit", "withdraw"}:
         return None
@@ -469,7 +467,7 @@ def deal_to_transaction(deal: dict[str, Any], account_id: str) -> dict[str, Any]
     }
 
 
-def rows(value: Any) -> list[Any]:
+def rows(value: Any) -> List[Any]:
     if value is None:
         return []
     if isinstance(value, list):
@@ -479,11 +477,11 @@ def rows(value: Any) -> list[Any]:
     return [value]
 
 
-def to_record(row: Any) -> dict[str, Any]:
+def to_record(row: Any) -> Dict[str, Any]:
     if isinstance(row, dict):
         return {str(key).strip(): clean_value(value) for key, value in row.items()}
 
-    record: dict[str, Any] = {}
+    record: Dict[str, Any] = {}
     for name in dir(row):
         if name.startswith("__"):
             continue
@@ -510,20 +508,20 @@ def clean_value(value: Any) -> Any:
     return value
 
 
-def field_text(source: dict[str, Any], candidates: list[str]) -> str:
+def field_text(source: Dict[str, Any], candidates: List[str]) -> str:
     value = field(source, candidates)
     if value is None:
         return ""
     return str(value).strip()
 
 
-def field_number(source: dict[str, Any], candidates: list[str]) -> float | None:
+def field_number(source: Dict[str, Any], candidates: List[str]) -> Optional[float]:
     value = field(source, candidates)
     parsed = nullable_number(value)
     return parsed
 
 
-def field(source: dict[str, Any], candidates: list[str]) -> Any:
+def field(source: Dict[str, Any], candidates: List[str]) -> Any:
     if not source:
         return None
     normalized = {normalize_key(key): value for key, value in source.items()}
@@ -538,7 +536,7 @@ def normalize_key(value: Any) -> str:
     return str(value or "").strip().lower().replace("_", "").replace("-", "")
 
 
-def nullable_number(value: Any) -> float | None:
+def nullable_number(value: Any) -> Optional[float]:
     if value is None or value == "":
         return None
     if isinstance(value, (int, float)):
@@ -558,7 +556,7 @@ def number(value: Any) -> float:
     return parsed if parsed is not None else 0.0
 
 
-def compact_dict(data: dict[str, Any]) -> dict[str, Any]:
+def compact_dict(data: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in data.items() if value not in (None, "")}
 
 
@@ -585,7 +583,7 @@ def instrument_key(symbol: Any, instrument_type: Any) -> str:
     return f"{type_text}:{symbol_text}" if symbol_text else ""
 
 
-def normalize_ratio(value: float | None) -> float | None:
+def normalize_ratio(value: Optional[float]) -> Optional[float]:
     if value is None:
         return None
     if abs(value) > 1:

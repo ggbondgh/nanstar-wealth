@@ -31,6 +31,17 @@ python D:\NanStar-Wealth\tools\guosen-sync\sync_guosen.py --config D:\NanStar-We
 If the script says `get_trade_detail_data` is unavailable, run it inside the
 Guosen iQuant/GTrade Python environment or add that environment to PATH.
 
+For iQuant strategy mode, use the two helper strategy files:
+
+- `iquant_probe_strategy.py`: first test whether iQuant can read your account,
+  positions, orders, and deals.
+- `iquant_sync_strategy.py`: after the probe works, push the merged data to
+  NanStar Wealth through Cloudflare.
+
+In iQuant, create a new Python strategy, paste the helper file content, replace
+`PUT_YOUR_GUOSEN_ACCOUNT_ID_HERE`, compile/save, and run it from strategy trading
+mode. Keep `config.json` as `dry_run: true` until the log output looks right.
+
 After the dry run looks right, set `dry_run` to `false` and run again.
 
 For continuous sync:
