@@ -1970,22 +1970,18 @@ textarea:focus {
   }
 
   .nav {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
     gap: 4px;
-    overflow-x: auto;
-    padding-bottom: 4px;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .nav::-webkit-scrollbar {
-    display: none;
   }
 
   .nav-item {
     flex-shrink: 0;
-    padding: 10px 14px;
+    padding: 10px 6px;
     gap: 0;
     border-radius: var(--radius);
+    text-align: center;
+    justify-items: center;
   }
 
   .nav-item small {
@@ -1993,7 +1989,7 @@ textarea:focus {
   }
 
   .nav-item span {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .side-panel {
