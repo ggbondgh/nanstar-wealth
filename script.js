@@ -1938,7 +1938,24 @@
     const timeline = getPortfolioTimeline("all").filter((point) => range === "all" ? true : point.time >= startKey);
     if (timeline.length) return timeline.map((point) => ({ time: point.time, date: point.time.slice(5), value: point.value }));
     const today = now.toISOString().slice(0, 10);
-    return [{ time: today, date: today.slice(5), value: portfolio.totalValue || 0 }];
+    const brokerageDate = getBrokerageSnapshotDate() || today;
+    const previous = new Date(`${brokerageDate}T00:00:00`);
+    previous.setDate(previous.getDate() - 1);
+    const previousKey = previous.toISOString().slice(0, 10);
+    const currentValue = portfolio.totalValue || 0;
+    if (!currentValue) return [{ time: today, date: today.slice(5), value: 0 }];
+    return [
+      { time: previousKey, date: previousKey.slice(5), value: currentValue, snapshotOnly: true },
+      { time: brokerageDate, date: brokerageDate.slice(5), value: currentValue, snapshotOnly: true }
+    ];
+  }
+
+  function getBrokerageSnapshotDate() {
+    const value = state.brokerage?.updatedAt || state.brokerage?.fetchedAt;
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
+    return date.toISOString().slice(0, 10);
   }
 
   function ensureWealthChart() {

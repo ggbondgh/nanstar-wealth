@@ -40,6 +40,11 @@ DEFAULT_CONFIG = {
     ),
 }
 
+ACCOUNT_QUERY_TYPES = ("ACCOUNT", "account")
+POSITION_QUERY_TYPES = ("POSITION", "position")
+ORDER_QUERY_TYPES = ("ORDER", "order", "entrust", "ENTRUST")
+DEAL_QUERY_TYPES = ("DEAL", "deal", "成交", "trade", "TRADE", "成交记录", "history_deal", "HISTORY_DEAL")
+
 EMPTY_STATE = {
     "prices": {},
     "dayChangePct": {},
@@ -133,7 +138,7 @@ def fetch_guosen_snapshot(config: Dict[str, Any]) -> Dict[str, Any]:
     account_id = config["account_id"]
     account_type = config["account_type"]
 
-    def query(kind: str) -> List[Any]:
+    def query_one(kind: str) -> List[Any]:
         try:
             data = get_trade_detail_data(account_id, account_type, kind)
         except TypeError:
@@ -146,15 +151,40 @@ def fetch_guosen_snapshot(config: Dict[str, Any]) -> Dict[str, Any]:
             return list(data)
         return [data]
 
+    def query_any(kinds: Tuple[str, ...]) -> List[Any]:
+        rows_by_key: Dict[str, Any] = {}
+        for kind in kinds:
+            try:
+                result = query_one(kind)
+            except Exception:
+                continue
+            for index, row in enumerate(result):
+                record = to_record(row)
+                key = stable_hash(
+                    [
+                        record.get("m_strTradeID") or record.get("trade_id") or record.get("deal_id"),
+                        record.get("m_strOrderID") or record.get("m_strOrderSysID") or record.get("order_id"),
+                        record.get("m_strInstrumentID") or record.get("symbol"),
+                        record.get("m_nTradeDate") or record.get("m_strTradeDate") or record.get("date"),
+                        record.get("m_nTradeTime") or record.get("m_strTradeTime") or record.get("time"),
+                        record.get("m_nVolume") or record.get("quantity"),
+                        record.get("m_dPrice") or record.get("price"),
+                    ]
+                )
+                if not key or key == stable_hash([None, None, None, None, None, None, None]):
+                    key = stable_hash([kind, index, record])
+                rows_by_key[key] = row
+        return list(rows_by_key.values())
+
     return {
         "provider": "guosen",
         "accountId": account_id,
         "accountType": account_type,
         "fetchedAt": now_iso(),
-        "accounts": query("ACCOUNT"),
-        "positions": query("POSITION"),
-        "orders": query("ORDER"),
-        "deals": query("DEAL"),
+        "accounts": query_any(ACCOUNT_QUERY_TYPES),
+        "positions": query_any(POSITION_QUERY_TYPES),
+        "orders": query_any(ORDER_QUERY_TYPES),
+        "deals": query_any(DEAL_QUERY_TYPES),
     }
 
 
