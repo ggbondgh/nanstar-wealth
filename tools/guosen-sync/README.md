@@ -9,13 +9,50 @@ Data flow:
 
 ```text
 Guosen iQuant/GTrade on local Windows
-  -> tools/guosen-sync/sync_guosen.py
+  -> iQuant snapshot strategy writes local_guosen_snapshot.json
+  -> watch_snapshot_upload.py uploads changed snapshots
   -> https://nanstar-wealth.pages.dev/api/state
   -> Cloudflare D1
   -> NanStar Wealth page on phone/PC
 ```
 
-## Setup
+## Portable setup on any Windows laptop
+
+Use this on each Windows computer where you have Guosen iQuant/GTrade installed
+and logged in. Company laptop and personal laptop can both upload to the same
+NanStar Wealth cloud state.
+
+1. Clone or copy this project to that laptop.
+2. Run:
+
+```powershell
+D:\NanStar-Wealth\tools\guosen-sync\setup_local_sync.bat
+```
+
+3. Enter:
+   - your Guosen account id.
+   - the NanStar sync token from Cloudflare Pages `NANSTAR_SYNC_TOKEN`.
+
+The setup script generates local-only files ignored by Git:
+
+- `config.json`: account id, sync token, upload options.
+- `local_iquant_snapshot_strategy.py`: iQuant strategy with the correct local
+  snapshot path for this laptop.
+
+4. In iQuant, create a Python strategy, paste the generated
+   `local_iquant_snapshot_strategy.py`, compile/save, and run it while logged in.
+   It writes `local_guosen_snapshot.json` every 60 seconds by default.
+5. Double-click:
+
+```powershell
+D:\NanStar-Wealth\tools\guosen-sync\start_snapshot_uploader.bat
+```
+
+Keep both iQuant and the uploader window running when you want account data to
+refresh. If either one is closed, the website will only show the last uploaded
+snapshot.
+
+## Manual setup
 
 1. Copy `config.example.json` to `config.json`.
 2. Fill:
@@ -31,12 +68,15 @@ python D:\NanStar-Wealth\tools\guosen-sync\sync_guosen.py --config D:\NanStar-We
 If the script says `get_trade_detail_data` is unavailable, run it inside the
 Guosen iQuant/GTrade Python environment or add that environment to PATH.
 
-For iQuant strategy mode, use the two helper strategy files:
+For iQuant strategy mode, use the helper strategy files:
 
 - `iquant_probe_strategy.py`: first test whether iQuant can read your account,
   positions, orders, and deals.
-- `iquant_sync_strategy.py`: after the probe works, push the merged data to
-  NanStar Wealth through Cloudflare.
+- `iquant_snapshot_strategy.py`: template for writing a local snapshot. Prefer
+  `setup_local_sync.bat`, because it generates the local path automatically.
+- `iquant_sync_strategy.py`: direct iQuant-to-Cloudflare push. This is less
+  reliable if Cloudflare blocks iQuant networking; the snapshot uploader is the
+  safer default.
 
 In iQuant, create a new Python strategy, paste the helper file content, replace
 `PUT_YOUR_GUOSEN_ACCOUNT_ID_HERE`, compile/save, and run it from strategy trading
@@ -44,10 +84,16 @@ mode. Keep `config.json` as `dry_run: true` until the log output looks right.
 
 After the dry run looks right, set `dry_run` to `false` and run again.
 
-For continuous sync:
+For continuous direct sync without iQuant snapshot mode:
 
 ```powershell
 python D:\NanStar-Wealth\tools\guosen-sync\sync_guosen.py --config D:\NanStar-Wealth\tools\guosen-sync\config.json
+```
+
+For continuous snapshot upload:
+
+```powershell
+python D:\NanStar-Wealth\tools\guosen-sync\watch_snapshot_upload.py --config D:\NanStar-Wealth\tools\guosen-sync\config.json --snapshot D:\NanStar-Wealth\tools\guosen-sync\local_guosen_snapshot.json
 ```
 
 ## What it writes
