@@ -10,5 +10,7 @@ __pycache__/
 .env
 .env.*
 tools/guosen-sync/config.json
+tools/guosen-sync/local_*.py
+tools/guosen-sync/local_*.json
 .vscode/
 .idea/

@@ -33,6 +33,11 @@ DEFAULT_CONFIG = {
     "update_prices_from_positions": True,
     "max_orders": 100,
     "max_deals": 300,
+    "user_agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
 }
 
 EMPTY_STATE = {
@@ -78,7 +83,7 @@ def main() -> int:
 def load_config(path: Path) -> Dict[str, Any]:
     config = copy.deepcopy(DEFAULT_CONFIG)
     if path.exists():
-        with path.open("r", encoding="utf-8") as handle:
+        with path.open("r", encoding="utf-8-sig") as handle:
             loaded = json.load(handle)
         if not isinstance(loaded, dict):
             raise ValueError(f"Config must be a JSON object: {path}")
@@ -191,7 +196,7 @@ def load_sample_snapshot(path: Path) -> Dict[str, Any]:
 def fetch_cloud_state(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
     request = urllib.request.Request(
         config["cloud_state_url"],
-        headers={"x-nanstar-sync-token": config["sync_token"], "Accept": "application/json"},
+        headers=cloud_headers(config),
         method="GET",
     )
     data = request_json(request)
@@ -209,9 +214,8 @@ def push_cloud_state(config: Dict[str, Any], state: Dict[str, Any]) -> Optional[
         config["cloud_state_url"],
         data=payload,
         headers={
+            **cloud_headers(config),
             "Content-Type": "application/json; charset=utf-8",
-            "x-nanstar-sync-token": config["sync_token"],
-            "Accept": "application/json",
         },
         method="PUT",
     )
@@ -228,6 +232,15 @@ def request_json(request: urllib.request.Request) -> Any:
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
+
+
+def cloud_headers(config: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "Accept": "application/json",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "User-Agent": str(config.get("user_agent") or DEFAULT_CONFIG["user_agent"]),
+        "x-nanstar-sync-token": config["sync_token"],
+    }
 
 
 def merge_state(current_state: Dict[str, Any], snapshot: Dict[str, Any], config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
