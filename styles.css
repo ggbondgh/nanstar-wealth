@@ -401,6 +401,10 @@ body.theme-light .sidebar {
   grid-column: span 8;
 }
 
+.span-12 {
+  grid-column: 1 / -1;
+}
+
 .panel-head {
   display: flex;
   align-items: center;
@@ -804,16 +808,19 @@ td {
 .brokerage-panel {
   display: grid;
   gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .brokerage-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
+  min-width: 0;
 }
 
 .brokerage-positions {
   min-width: 0;
+  overflow-x: auto;
 }
 
 .brokerage-empty {
@@ -855,6 +862,8 @@ td {
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 16px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .record-filters {
@@ -1603,7 +1612,8 @@ textarea:focus {
   .span-5,
   .span-6,
   .span-7,
-  .span-8 {
+  .span-8,
+  .span-12 {
     grid-column: 1 / -1;
   }
 }

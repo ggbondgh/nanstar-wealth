@@ -695,7 +695,7 @@ ORDER_STATUS_KEYS = ["status", "order_status", "委托状态", "m_strOrderStatus
 ORDER_QUANTITY = ["order_quantity", "quantity", "委托数量", "m_nVolumeTotalOriginal", "m_nVolume", "m_dVolume"]
 ORDER_TRADED_QUANTITY = ["traded_quantity", "deal_volume", "成交数量", "m_nVolumeTraded", "m_nTradeVolume"]
 
-ACCOUNT_TOTAL_ASSET = ["total_asset", "asset", "总资产", "m_dTotalAsset", "m_dAsset"]
+ACCOUNT_TOTAL_ASSET = ["total_asset", "asset", "总资产", "m_dTotalAsset", "m_dAsset", "m_dAssetBalance", "m_dAssureAsset"]
 ACCOUNT_CASH_BALANCE = ["cash_balance", "balance", "资金余额", "m_dBalance"]
 ACCOUNT_AVAILABLE_CASH = ["available_cash", "available", "可用资金", "m_dAvailable"]
 ACCOUNT_FETCHABLE_CASH = ["fetchable_cash", "fetchable", "可取资金", "m_dFetchBalance"]
@@ -705,10 +705,10 @@ ACCOUNT_PNL = ["pnl", "position_profit", "浮动盈亏", "持仓盈亏", "m_dPos
 
 POSITION_QUANTITY = ["quantity", "volume", "持仓数量", "证券数量", "m_nVolume", "m_dVolume"]
 POSITION_AVAILABLE_QUANTITY = ["available_quantity", "can_use_volume", "可用数量", "可卖数量", "m_nCanUseVolume", "m_dCanUseVolume"]
-POSITION_COST_PRICE = ["cost_price", "open_price", "成本价", "持仓成本", "m_dOpenPrice", "m_dCostPrice"]
+POSITION_COST_PRICE = ["cost_price", "open_price", "成本价", "持仓成本", "m_dSingleCost", "m_dAvgOpenPrice", "m_dOpenPrice", "m_dCostPrice"]
 POSITION_LAST_PRICE = ["last_price", "price", "最新价", "现价", "m_dLastPrice", "m_dPrice"]
 POSITION_MARKET_VALUE = ["market_value", "市值", "持仓市值", "m_dMarketValue", "m_dInstrumentValue"]
-POSITION_PNL = ["pnl", "profit", "浮动盈亏", "持仓盈亏", "m_dFloatProfit", "m_dPositionProfit", "m_dProfit"]
+POSITION_PNL = ["pnl", "profit", "持仓盈亏", "浮动盈亏", "m_dPositionProfit", "m_dFloatProfit", "m_dProfit"]
 POSITION_PNL_RATE = ["pnl_rate", "profit_rate", "盈亏比例", "盈亏率", "m_dProfitRate"]
 POSITION_DAY_CHANGE_PCT = ["day_change_pct", "涨跌幅", "今日涨幅", "m_dProfitRatio", "m_dRiseRatio"]
 

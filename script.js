@@ -715,7 +715,121 @@
     return action === "withdraw";
   }
 
+  function finiteValue(...values) {
+    for (const value of values) {
+      if (value === null || value === undefined || value === "") continue;
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return NaN;
+  }
+
+  function normalizeTinyMoney(value) {
+    const parsed = finiteValue(value);
+    if (!Number.isFinite(parsed)) return 0;
+    return Math.abs(parsed) < 1 ? 0 : parsed;
+  }
+
+  function isBrokerageCashPosition(item) {
+    const symbol = normalizeSymbol(item?.symbol || item?.code || "");
+    const type = String(item?.type || "").trim().toLowerCase();
+    const name = String(item?.name || "");
+    return type === "cash" || symbol === "CASH" || symbol === "RMB" || /现金|资金|余额/.test(name);
+  }
+
+  function normalizeBrokeragePosition(item, accountLabel) {
+    const symbol = normalizeSymbol(item.symbol || item.code || "");
+    if (!symbol || isBrokerageCashPosition(item)) return null;
+    const name = item.name || symbol;
+    const type = normalizeInstrumentType(item.type, symbol, name);
+    const quantity = number(item.quantity);
+    const rawMarketValue = finiteValue(item.marketValue, quantity * finiteValue(item.lastPrice, item.price));
+    const value = normalizeTinyMoney(rawMarketValue);
+    const price = finiteValue(item.lastPrice, item.price, quantity ? value / quantity : NaN, legacyPriceValue(symbol, type), 0);
+    const costPrice = finiteValue(item.costPrice);
+    const costFromPrice = Number.isFinite(costPrice) ? costPrice * quantity : NaN;
+    const cost = finiteValue(item.cost, item.costAmount, costFromPrice, value - number(item.pnl), value);
+    const pnl = finiteValue(item.pnl, value - cost, 0);
+    const avgCost = quantity ? cost / quantity : finiteValue(item.costPrice, 0);
+    const pnlRate = Number.isFinite(finiteValue(item.pnlRate)) ? finiteValue(item.pnlRate) : (cost > 0 ? pnl / cost : 0);
+    const dayChange = value * (finiteValue(item.dayChangePct, legacyDayChangeValue(symbol, type), 0) || 0);
+    return {
+      key: instrumentKey(symbol, type),
+      symbol,
+      name,
+      type,
+      account: accountLabel,
+      currency: item.currency || "CNY",
+      quantity,
+      cost,
+      price,
+      value,
+      pnl,
+      pnlRate,
+      avgCost,
+      dayChange,
+      realized: 0,
+      source: "brokerage"
+    };
+  }
+
+  function getBrokerageSnapshot() {
+    const brokerage = state.brokerage;
+    if (!brokerage || typeof brokerage !== "object") {
+      return {
+        brokerage: null,
+        account: {},
+        accountLabel: "国信",
+        holdings: [],
+        keys: new Set(),
+        cashValue: 0,
+        totalAsset: NaN,
+        marketValue: NaN,
+        pnl: 0,
+        hasData: false
+      };
+    }
+
+    const accounts = Array.isArray(brokerage.accounts) ? brokerage.accounts : [];
+    const positions = Array.isArray(brokerage.positions) ? brokerage.positions : [];
+    const account = accounts[0] || {};
+    const accountLabel = `国信 ${brokerage.accountIdMasked || ""}`.trim();
+    const holdings = positions
+      .map((item) => normalizeBrokeragePosition(item, accountLabel))
+      .filter(Boolean);
+    const keys = new Set(holdings.map((item) => item.key));
+    const positionMarketValue = holdings.reduce((sum, item) => sum + Math.max(0, item.value), 0);
+    const accountMarketValue = finiteValue(account.marketValue);
+    const marketValue = Number.isFinite(accountMarketValue) && accountMarketValue >= 0 ? accountMarketValue : positionMarketValue;
+    const accountTotalAsset = finiteValue(account.totalAsset);
+    const totalAsset = Number.isFinite(accountTotalAsset) && accountTotalAsset >= marketValue
+      ? accountTotalAsset
+      : NaN;
+    const explicitCash = finiteValue(account.availableCash, account.fetchableCash, account.cashBalance);
+    const cashRowsValue = positions
+      .filter(isBrokerageCashPosition)
+      .reduce((sum, item) => sum + normalizeTinyMoney(finiteValue(item.marketValue, item.value, item.quantity, item.availableCash, 0)), 0);
+    let cashValue = 0;
+    if (Number.isFinite(totalAsset)) cashValue = Math.max(0, totalAsset - marketValue);
+    else if (cashRowsValue > 0) cashValue = cashRowsValue;
+    else if (Number.isFinite(explicitCash)) cashValue = Math.max(0, explicitCash);
+
+    return {
+      brokerage,
+      account,
+      accountLabel,
+      holdings,
+      keys,
+      cashValue,
+      totalAsset: Number.isFinite(totalAsset) ? totalAsset : marketValue + cashValue,
+      marketValue,
+      pnl: finiteValue(account.pnl, holdings.reduce((sum, item) => sum + item.pnl, 0), 0),
+      hasData: Boolean(accounts.length || positions.length)
+    };
+  }
+
   function computePortfolio() {
+    const brokerageSnapshot = getBrokerageSnapshot();
     const holdingsMap = new Map();
     let cash = 0;
     let realized = 0;
@@ -733,6 +847,8 @@
       normalizeTransactionInstrument(tx);
       const symbol = normalizeSymbol(tx.symbol);
       const key = instrumentKey(symbol, tx.type);
+
+      if (key && brokerageSnapshot.keys.has(key)) return;
 
       if (isCashInAction(tx.action)) {
         cash += gross;
@@ -801,11 +917,14 @@
         return { ...holding, price, value, pnl, pnlRate, avgCost, dayChange };
       });
 
+    holdings.push(...brokerageSnapshot.holdings);
+    cash += brokerageSnapshot.cashValue;
+
     const cashHolding = {
       symbol: "CASH",
       name: "可用现金",
       type: "cash",
-      account: "聚合",
+      account: brokerageSnapshot.hasData ? brokerageSnapshot.accountLabel : "聚合",
       currency: "CNY",
       quantity: cash,
       cost: cash,
@@ -824,14 +943,17 @@
     const unrealized = holdings.reduce((sum, holding) => sum + (holding.type === "cash" ? 0 : holding.value - holding.cost), 0);
     const totalPnl = unrealized + realized + dividends;
     const dayChange = holdings.reduce((sum, holding) => sum + holding.dayChange, 0);
+    const inferredCapital = Math.max(0, totalValue - totalPnl);
+    const capitalBase = Math.max(invested, inferredCapital, totalCost);
+    const pnlRateBase = totalCost || capitalBase;
 
     holdings.forEach((holding) => {
-      holding.weight = totalValue > 0 ? holding.value / totalValue : 0;
+      holding.weight = totalValue > 0 ? Math.max(0, holding.value) / totalValue : 0;
     });
 
     return {
       holdings: holdings.sort((a, b) => b.value - a.value),
-      invested,
+      invested: capitalBase,
       totalValue,
       totalCost,
       totalPnl,
@@ -839,7 +961,7 @@
       dividends,
       dayChange,
       dayChangeRate: totalValue ? dayChange / (totalValue - dayChange) : 0,
-      totalPnlRate: invested ? totalPnl / invested : 0,
+      totalPnlRate: pnlRateBase ? totalPnl / pnlRateBase : 0,
       cash: cashHolding
     };
   }
@@ -866,7 +988,7 @@
     els.dayChange.innerHTML = colorText(portfolio.dayChange, moneySigned(portfolio.dayChange));
     els.dayChangeRate.innerHTML = colorText(portfolio.dayChangeRate, percentSigned(portfolio.dayChangeRate));
     els.cashValue.textContent = money(portfolio.cash.value);
-    els.cashWeight.textContent = `${percent(portfolio.cash.weight)} of portfolio`;
+    els.cashWeight.textContent = `占组合 ${percent(portfolio.cash.weight)}`;
   }
 
   function getTransactionGross(tx) {
@@ -1191,45 +1313,41 @@
     if (!brokerage) {
       els.brokerageSummary.innerHTML = `
         <article class="summary-tile">
-          <span>Status</span>
-          <strong>Not connected</strong>
+          <span>状态</span>
+          <strong>未连接</strong>
         </article>
         <article class="summary-tile">
-          <span>Bridge</span>
-          <strong>Local only</strong>
+          <span>同步方式</span>
+          <strong>本地桥接</strong>
         </article>
         <article class="summary-tile">
-          <span>Provider</span>
-          <strong>Guosen</strong>
+          <span>券商</span>
+          <strong>国信证券</strong>
         </article>
         <article class="summary-tile">
-          <span>Snapshot</span>
+          <span>快照时间</span>
           <strong>--</strong>
         </article>
       `;
-      els.brokeragePositions.innerHTML = `<div class="brokerage-empty">Run tools/guosen-sync locally to show account, position, order, and deal snapshots here.</div>`;
+      els.brokeragePositions.innerHTML = `<div class="brokerage-empty">还没有国信账户快照。运行本地同步脚本后，这里会显示资金、持仓、委托和成交记录。</div>`;
       return;
     }
 
-    const accounts = Array.isArray(brokerage.accounts) ? brokerage.accounts : [];
-    const positions = Array.isArray(brokerage.positions) ? brokerage.positions : [];
+    const snapshot = getBrokerageSnapshot();
+    const positions = snapshot.holdings;
     const orders = Array.isArray(brokerage.orders) ? brokerage.orders : [];
     const deals = Array.isArray(brokerage.deals) ? brokerage.deals : [];
-    const account = accounts[0] || {};
-    const totalAsset = firstFinite(account.totalAsset, account.marketValue + account.cashBalance);
-    const availableCash = firstFinite(account.availableCash, account.cashBalance, 0);
-    const marketValue = firstFinite(account.marketValue, positions.reduce((sum, item) => sum + number(item.marketValue), 0));
     const updatedAt = formatSnapshotTime(brokerage.updatedAt);
 
     els.brokerageSummary.innerHTML = [
-      { label: "Account", value: brokerage.accountIdMasked || "--" },
-      { label: "Total asset", value: Number.isFinite(totalAsset) ? money(totalAsset) : "--" },
-      { label: "Available cash", value: Number.isFinite(availableCash) ? money(availableCash) : "--" },
-      { label: "Market value", value: Number.isFinite(marketValue) ? money(marketValue) : "--" },
-      { label: "Positions", value: String(positions.length) },
-      { label: "Orders / Deals", value: `${orders.length} / ${deals.length}` },
-      { label: "Updated", value: updatedAt || "--" },
-      { label: "Source", value: brokerage.source || brokerage.provider || "local-bridge" }
+      { label: "账户", value: brokerage.accountIdMasked || "--" },
+      { label: "总资产", value: Number.isFinite(snapshot.totalAsset) ? money(snapshot.totalAsset) : "--" },
+      { label: "可用现金", value: money(snapshot.cashValue) },
+      { label: "证券市值", value: money(snapshot.marketValue) },
+      { label: "持仓数", value: String(positions.length) },
+      { label: "委托 / 成交", value: `${orders.length} / ${deals.length}` },
+      { label: "更新时间", value: updatedAt || "--" },
+      { label: "来源", value: brokerage.source || brokerage.provider || "local-bridge" }
     ].map((item) => `
       <article class="summary-tile">
         <span>${escapeHtml(item.label)}</span>
@@ -1243,13 +1361,13 @@
           <table class="brokerage-table">
             <thead>
               <tr>
-                <th>Code / Name</th>
-                <th>Type</th>
-                <th>Quantity</th>
-                <th>Cost</th>
-                <th>Last</th>
-                <th>Market Value</th>
-                <th>P/L</th>
+                <th>代码 / 名称</th>
+                <th>类型</th>
+                <th>数量</th>
+                <th>成本</th>
+                <th>现价</th>
+                <th>市值</th>
+                <th>盈亏</th>
               </tr>
             </thead>
             <tbody>
@@ -1263,25 +1381,17 @@
                   </td>
                   <td>${escapeHtml(typeNames[item.type] || item.type || "--")}</td>
                   <td>${formatNumber(item.quantity)}</td>
-                  <td>${optionalMoney(item.costPrice)}</td>
-                  <td>${optionalMoney(item.lastPrice)}</td>
-                  <td>${optionalMoney(item.marketValue)}</td>
-                  <td>${colorText(number(item.pnl), moneySigned(number(item.pnl)))} ${item.pnlRate === undefined ? "" : `<small>${escapeHtml(percent(item.pnlRate))}</small>`}</td>
+                  <td>${money(item.avgCost)}</td>
+                  <td>${money(item.price)}</td>
+                  <td>${money(item.value)}</td>
+                  <td>${colorText(number(item.pnl), moneySigned(number(item.pnl)))} <small>${escapeHtml(percent(item.pnlRate))}</small></td>
                 </tr>
               `).join("")}
             </tbody>
           </table>
         </div>
       `
-      : `<div class="brokerage-empty">No Guosen positions in the latest snapshot.</div>`;
-  }
-
-  function firstFinite(...values) {
-    for (const value of values) {
-      const parsed = Number(value);
-      if (Number.isFinite(parsed)) return parsed;
-    }
-    return NaN;
+      : `<div class="brokerage-empty">最新快照里没有国信持仓。</div>`;
   }
 
   function optionalMoney(value, currency = "CNY") {
