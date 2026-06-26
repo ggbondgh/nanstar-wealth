@@ -3,7 +3,8 @@ param(
   [string]$SyncToken = "",
   [string]$AccountType = "stock",
   [int]$SnapshotIntervalSeconds = 60,
-  [switch]$DryRun
+  [switch]$DryRun,
+  [switch]$SkipAutostart
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +12,8 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigPath = Join-Path $ScriptDir "config.json"
 $SnapshotPath = Join-Path $ScriptDir "local_guosen_snapshot.json"
 $StrategyPath = Join-Path $ScriptDir "local_iquant_snapshot_strategy.py"
+$AutostartInstallerPath = Join-Path $ScriptDir "install_autostart_uploader.ps1"
+$HiddenRunnerPath = Join-Path $ScriptDir "run_snapshot_uploader_hidden.vbs"
 
 if (-not $AccountId) {
   $AccountId = Read-Host "Guosen account id"
@@ -168,13 +171,39 @@ def clean_value(value):
 "@
 
 Set-Content -LiteralPath $StrategyPath -Value $strategy -Encoding UTF8
+try {
+  Set-Clipboard -LiteralPath $StrategyPath
+  $clipboardMessage = "Copied generated strategy file to clipboard."
+} catch {
+  try {
+    Get-Content -Raw -Encoding UTF8 -LiteralPath $StrategyPath | Set-Clipboard
+    $clipboardMessage = "Copied generated strategy text to clipboard."
+  } catch {
+    $clipboardMessage = "Could not copy strategy to clipboard. Open the file manually."
+  }
+}
+
+if (-not $SkipAutostart) {
+  try {
+    & $AutostartInstallerPath
+    Start-Process -FilePath "wscript.exe" -ArgumentList "`"$HiddenRunnerPath`"" -WindowStyle Hidden
+    $autostartMessage = "Installed Windows startup uploader and started it in the background."
+  } catch {
+    $autostartMessage = "Could not install/start the background uploader: $($_.Exception.Message)"
+  }
+} else {
+  $autostartMessage = "Skipped Windows startup uploader installation."
+}
 
 Write-Host ""
 Write-Host "Generated local files:"
 Write-Host "  $ConfigPath"
 Write-Host "  $StrategyPath"
 Write-Host ""
+Write-Host $clipboardMessage
+Write-Host $autostartMessage
+Write-Host ""
 Write-Host "Next:"
-Write-Host "1. Paste $StrategyPath into an iQuant Python strategy and run it while logged in."
-Write-Host "2. Double-click start_snapshot_uploader.bat to upload local_guosen_snapshot.json automatically."
-Write-Host "3. Keep both iQuant and the uploader running when you want account data to update."
+Write-Host "1. In iQuant, create/save one Python strategy from the generated content."
+Write-Host "2. Daily use: log into iQuant and run the saved NanStar snapshot strategy."
+Write-Host "3. The uploader will run after Windows login and upload new snapshots automatically."

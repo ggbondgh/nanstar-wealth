@@ -38,19 +38,26 @@ The setup script generates local-only files ignored by Git:
 - `config.json`: account id, sync token, upload options.
 - `local_iquant_snapshot_strategy.py`: iQuant strategy with the correct local
   snapshot path for this laptop.
+- a Windows startup shortcut for the hidden snapshot uploader.
 
-4. In iQuant, create a Python strategy, paste the generated
-   `local_iquant_snapshot_strategy.py`, compile/save, and run it while logged in.
-   It writes `local_guosen_snapshot.json` every 60 seconds by default.
-5. Double-click:
+4. In iQuant, create a Python strategy. The setup script copies the generated
+   strategy to your clipboard; paste it, compile/save it as something like
+   `NanStar Snapshot`, and keep it saved. It writes
+   `local_guosen_snapshot.json` every 60 seconds by default.
+
+Daily use after setup:
+
+1. Log into iQuant/GTrade.
+2. Run the saved `NanStar Snapshot` iQuant strategy.
+3. Open NanStar Wealth and click `立即同步` or refresh.
+
+If iQuant is closed, not logged in, or the saved strategy is not running, the
+website will only show the last uploaded snapshot. To remove the startup
+uploader, run:
 
 ```powershell
-D:\NanStar-Wealth\tools\guosen-sync\start_snapshot_uploader.bat
+D:\NanStar-Wealth\tools\guosen-sync\uninstall_autostart_uploader.bat
 ```
-
-Keep both iQuant and the uploader window running when you want account data to
-refresh. If either one is closed, the website will only show the last uploaded
-snapshot.
 
 ## Manual setup
 
