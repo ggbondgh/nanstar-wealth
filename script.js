@@ -685,7 +685,16 @@
 
   function switchView(view) {
     document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.view === view));
-    document.querySelectorAll(".view").forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === view));
+    document.querySelectorAll(".view").forEach((panel) => {
+      const isActive = panel.dataset.panel === view;
+      panel.classList.toggle("active", isActive);
+      // Re-trigger animation on view switch
+      if (isActive) {
+        panel.style.animation = 'none';
+        panel.offsetHeight; // Force reflow
+        panel.style.animation = '';
+      }
+    });
     const titles = {
       overview: "资产总览",
       holdings: "全部持仓",
@@ -693,6 +702,8 @@
       insights: "复盘与风险"
     };
     els.pageTitle.textContent = titles[view] || "资产总览";
+    // Scroll to top smoothly when switching views
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function isBuyAction(action) {

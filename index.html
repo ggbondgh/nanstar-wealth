@@ -22,19 +22,19 @@
 
         <nav class="nav" aria-label="资产视图">
           <button class="nav-item active" type="button" data-view="overview">
-            <span>总览</span>
+            <span>📊 总览</span>
             <small>资产、收益、配置</small>
           </button>
           <button class="nav-item" type="button" data-view="holdings">
-            <span>持仓</span>
+            <span>💼 持仓</span>
             <small>股票 / 基金 / 现金</small>
           </button>
           <button class="nav-item" type="button" data-view="transactions">
-            <span>流水</span>
+            <span>📝 流水</span>
             <small>买入、卖出、定投、活动</small>
           </button>
           <button class="nav-item" type="button" data-view="insights">
-            <span>复盘</span>
+            <span>🔍 复盘</span>
             <small>策略标签与风险</small>
           </button>
         </nav>
@@ -77,16 +77,16 @@
             <h2 id="pageTitle">资产总览</h2>
           </div>
           <div class="topbar-actions">
-            <button class="icon-button" id="themeToggle" type="button" aria-label="切换主题" title="切换主题">
-              <span aria-hidden="true">◐</span>
+            <button class="icon-button" id="themeToggle" type="button" aria-label="切换主题" title="切换明暗主题">
+              <span aria-hidden="true">🌓</span>
             </button>
-            <button class="ghost-button" id="exportCsvButton" type="button">导出 CSV</button>
-            <button class="ghost-button" id="syncTokenButton" type="button">同步口令</button>
-            <button class="ghost-button" id="syncNowButton" type="button">立即同步</button>
-            <button class="ghost-button" id="resetButton" type="button">清空数据</button>
-            <button class="ghost-button" id="openWatchlistButton" type="button">添加自选</button>
-            <button class="ghost-button" id="openImportButton" type="button">导入数据</button>
-            <button class="primary-button" id="openTransactionButton" type="button">新增交易</button>
+            <button class="ghost-button" id="exportCsvButton" type="button" title="导出持仓数据为 CSV 文件">📥 导出 CSV</button>
+            <button class="ghost-button" id="syncTokenButton" type="button" title="设置同步口令，多设备同步数据">🔑 同步口令</button>
+            <button class="ghost-button" id="syncNowButton" type="button" title="立即同步到云端">☁️ 立即同步</button>
+            <button class="ghost-button" id="resetButton" type="button" title="清空所有数据（不可恢复）">🗑️ 清空数据</button>
+            <button class="ghost-button" id="openWatchlistButton" type="button" title="添加自选股/基金">⭐ 添加自选</button>
+            <button class="ghost-button" id="openImportButton" type="button" title="从 Excel/CSV/文本导入交易记录">📂 导入数据</button>
+            <button class="primary-button" id="openTransactionButton" type="button" title="记录一笔新的交易">➕ 新增交易</button>
           </div>
         </header>
 
