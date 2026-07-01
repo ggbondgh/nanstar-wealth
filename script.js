@@ -197,7 +197,9 @@
     fundHoldingSearch: document.getElementById("fundHoldingSearch"),
     fundEmpty: document.getElementById("fundEmpty"),
     fundEmptyImportButton: document.getElementById("fundEmptyImportButton"),
-    fundExportButton: document.getElementById("fundExportButton")
+    fundExportButton: document.getElementById("fundExportButton"),
+    fundLoading: document.getElementById("fundLoading"),
+    fundTradeSummary: document.getElementById("fundTradeSummary")
   };
 
   let localStateSource = "sample";
@@ -224,6 +226,7 @@
   let instrumentSeriesApi = null;
   let fundData = null;
   let activeFundTab = "guru";
+  var fundGuruSort = { col: "totalValue", asc: false };
   let instrumentAreaSeriesApi = null;
   let instrumentCandlesSeriesApi = null;
   let wealthChartLabelApi = null;
@@ -4292,11 +4295,19 @@
     document.querySelectorAll(".fund-panel").forEach(function (p) {
       p.classList.toggle("active", p.dataset.fundPanel === tab);
     });
-    renderFunds();
+    els.fundLoading.hidden = true;
+    if (fundData && fundData.gurus) {
+      els.fundEmpty.hidden = true;
+      renderFunds();
+    }
   }
 
   function loadFundDataFromFile() {
     els.fundRefreshButton.classList.add("loading");
+    els.fundLoading.hidden = false;
+    els.fundEmpty.hidden = true;
+    var panels = document.querySelectorAll("[data-fund-panel]");
+    panels.forEach(function (p) { p.classList.remove("active"); });
     fetch("./output/fund_data.json")
       .then(function (res) {
         if (!res.ok) throw new Error("No data");
@@ -4306,15 +4317,16 @@
         fundData = data;
         els.fundUpdateTime.textContent = "数据更新：" + (data.updateTime || "--");
         els.fundEmpty.hidden = true;
-        renderFunds();
+        switchFundTab(activeFundTab);
       })
       .catch(function () {
         fundData = null;
         els.fundUpdateTime.textContent = "数据来源：待生成（运行 scrape.py）";
+        els.fundEmpty.hidden = false;
       })
       .finally(function () {
         els.fundRefreshButton.classList.remove("loading");
-        renderFunds();
+        els.fundLoading.hidden = true;
       });
   }
 
@@ -4435,7 +4447,18 @@
     var gurus = fundData.gurus;
     if (!gurus || !gurus.length) return;
 
-    var sorted = gurus.slice().sort(function (a, b) { return number(b.totalValue) - number(a.totalValue); });
+    // Sort
+    var sorted = gurus.slice().sort(function (a, b) {
+      var va, vb;
+      switch (fundGuruSort.col) {
+        case "name": va = a.name; vb = b.name; return fundGuruSort.asc ? (va < vb ? -1 : va > vb ? 1 : 0) : (va > vb ? -1 : va < vb ? 1 : 0);
+        case "totalValue": va = number(a.totalValue); vb = number(b.totalValue); return (va - vb) * (fundGuruSort.asc ? 1 : -1);
+        case "returnRate": va = number(a.returnRate); vb = number(b.returnRate); return (va - vb) * (fundGuruSort.asc ? 1 : -1);
+        case "heavyRatio": va = number(a.heavyRatio) || 0; vb = number(b.heavyRatio) || 0; return (va - vb) * (fundGuruSort.asc ? 1 : -1);
+        case "sectorCount": va = a.sectorCount || 0; vb = b.sectorCount || 0; return (va - vb) * (fundGuruSort.asc ? 1 : -1);
+        default: va = number(a.totalValue); vb = number(b.totalValue); return (va - vb) * (fundGuruSort.asc ? 1 : -1);
+      }
+    });
 
     // Stats
     var totalAsset = sorted.reduce(function (s, g) { return s + number(g.totalValue); }, 0);
@@ -4444,6 +4467,38 @@
       '<div class="fund-stat-card"><span class="stat-label">跟踪达人</span><span class="stat-value">' + sorted.length + ' 位</span></div>' +
       '<div class="fund-stat-card"><span class="stat-label">总持仓规模</span><span class="stat-value">' + shortMoney(totalAsset) + '</span></div>' +
       '<div class="fund-stat-card"><span class="stat-label">平均收益率</span><span class="stat-value ' + (avgReturn >= 0 ? 'guru-return-positive' : 'guru-return-negative') + '">' + percent(avgReturn) + '</span></div>';
+
+    // Sort class helper
+    var sortCls = function (col) {
+      return fundGuruSort.col === col ? (fundGuruSort.asc ? ' asc' : ' desc') : '';
+    };
+
+    // Headers
+    var theadHtml = '<tr>' +
+      '<th>#</th>' +
+      '<th class="sortable' + sortCls("name") + '" onclick="void(0)" data-fund-sort="name">达人名称</th>' +
+      '<th class="sortable' + sortCls("totalValue") + '" onclick="void(0)" data-fund-sort="totalValue">持仓总额</th>' +
+      '<th class="sortable' + sortCls("returnRate") + '" onclick="void(0)" data-fund-sort="returnRate">持仓收益率</th>' +
+      '<th>重仓板块</th>' +
+      '<th class="sortable' + sortCls("heavyRatio") + '" onclick="void(0)" data-fund-sort="heavyRatio">重仓占比</th>' +
+      '<th class="sortable' + sortCls("sectorCount") + '" onclick="void(0)" data-fund-sort="sectorCount">板块数</th>' +
+      '<th>最近交易</th>' +
+      '</tr>';
+    els.fundGuruBody.closest("table").querySelector("thead").innerHTML = theadHtml;
+
+    // Bind sort handlers
+    document.querySelectorAll("#fundGuruBody").closest(".table-wrap").querySelectorAll("th.sortable").forEach(function (th) {
+      th.addEventListener("click", function () {
+        var col = this.dataset.fundSort;
+        if (fundGuruSort.col === col) {
+          fundGuruSort.asc = !fundGuruSort.asc;
+        } else {
+          fundGuruSort.col = col;
+          fundGuruSort.asc = false;
+        }
+        renderFundGuruTable();
+      });
+    });
 
     var html = "";
     sorted.forEach(function (guru, idx) {
@@ -4460,7 +4515,7 @@
         "<td><span class=\"fund-sector-tag" + sectorClass + "\">" + escapeHtml(String(sector || "--")) + "</span></td>" +
         "<td>" + (guru.heavyRatio != null ? percent(number(guru.heavyRatio)) : "--") + "</td>" +
         "<td>" + (guru.sectorCount || "--") + "</td>" +
-        "<td>" + escapeHtml(String(guru.lastTrade || "--")) + "</td>" +
+        "<td style=\"font-size:0.75rem\">" + escapeHtml(String(guru.lastTrade || "--")) + "</td>" +
         "</tr>";
     });
     els.fundGuruBody.innerHTML = html;
@@ -4492,7 +4547,21 @@
 
   function renderFundTradeTable() {
     var trades = fundData.trades;
-    if (!trades || !trades.length) { els.fundTradeBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:32px">暂无今日交易数据</td></tr>'; return; }
+    if (!trades || !trades.length) { els.fundTradeBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:32px">暂无今日交易数据</td></tr>'; els.fundTradeSummary.innerHTML = ''; return; }
+
+    // Stats
+    var cntBuy = 0, cntSell = 0, cntConvert = 0, cntAuto = 0;
+    trades.forEach(function (t) {
+      if (t.action.indexOf("转换") !== -1) cntConvert++;
+      else if (t.action.indexOf("卖出") !== -1) cntSell++;
+      else if (t.action.indexOf("定投") !== -1) cntAuto++;
+      else cntBuy++;
+    });
+    els.fundTradeSummary.innerHTML =
+      '<div class="trade-stat"><span class="ts-dot buy-dot"></span><span class="ts-label">买入</span><span class="ts-count">' + cntBuy + '</span></div>' +
+      '<div class="trade-stat"><span class="ts-dot sell-dot"></span><span class="ts-label">卖出</span><span class="ts-count">' + cntSell + '</span></div>' +
+      (cntConvert ? '<div class="trade-stat"><span class="ts-dot convert-dot"></span><span class="ts-label">转换</span><span class="ts-count">' + cntConvert + '</span></div>' : '') +
+      (cntAuto ? '<div class="trade-stat"><span class="ts-dot auto-dot"></span><span class="ts-label">定投</span><span class="ts-count">' + cntAuto + '</span></div>' : '');
 
     var html = "";
     trades.forEach(function (t) {

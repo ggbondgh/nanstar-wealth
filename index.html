@@ -414,6 +414,7 @@
 
           <!-- 今日操作 -->
           <section class="fund-panel" data-fund-panel="trades">
+            <div class="fund-trade-summary" id="fundTradeSummary"></div>
             <div class="table-wrap">
               <table>
                 <thead>
@@ -453,6 +454,20 @@
               </table>
             </div>
           </section>
+
+          <!-- Loading skeleton -->
+          <div class="fund-loading" id="fundLoading">
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-table">
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+            </div>
+          </div>
 
           <section class="fund-empty" id="fundEmpty" hidden>
             <div class="empty-state">

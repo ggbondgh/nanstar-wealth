@@ -2607,3 +2607,227 @@ textarea:focus {
   display: inline-block;
   animation: fundSpin 1s linear infinite;
 }
+
+/* ====== Loading skeleton ====== */
+
+.fund-loading {
+  padding: 16px 0;
+}
+
+.skeleton-card {
+  height: 56px;
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.5s ease-in-out infinite;
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+}
+
+.skeleton-table {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin-top: 16px;
+}
+
+.skeleton-row {
+  height: 32px;
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1.5s ease-in-out infinite;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  opacity: 0.5;
+}
+
+.skeleton-row:nth-child(odd) { width: 85%; }
+.skeleton-row:nth-child(even) { width: 70%; }
+
+@keyframes skeletonShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ====== Enhanced stat cards ====== */
+
+.fund-stat-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.fund-stat-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 3px 0 0 3px;
+}
+
+.fund-stat-card:nth-child(1)::before { background: var(--blue); }
+.fund-stat-card:nth-child(2)::before { background: var(--amber); }
+.fund-stat-card:nth-child(3)::before { background: var(--green); }
+
+/* ====== Trade summary ====== */
+
+.fund-trade-summary {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.fund-trade-summary .trade-stat {
+  padding: 8px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fund-trade-summary .trade-stat .ts-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.fund-trade-summary .trade-stat .ts-dot.buy-dot { background: #fb7185; }
+.fund-trade-summary .trade-stat .ts-dot.sell-dot { background: #34d399; }
+.fund-trade-summary .trade-stat .ts-dot.convert-dot { background: #f59e0b; }
+.fund-trade-summary .trade-stat .ts-dot.auto-dot { background: #60a5fa; }
+
+.fund-trade-summary .trade-stat .ts-count {
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.fund-trade-summary .trade-stat .ts-label {
+  color: var(--muted);
+}
+
+/* ====== Sortable table headers ====== */
+
+.fund-guru-table thead th.sortable {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  padding-right: 20px;
+}
+
+.fund-guru-table thead th.sortable:hover {
+  color: var(--green);
+}
+
+.fund-guru-table thead th.sortable::after {
+  content: ' ⇅';
+  font-size: 0.625rem;
+  opacity: 0.4;
+  position: absolute;
+  right: 4px;
+}
+
+.fund-guru-table thead th.sortable.asc::after {
+  content: ' ▲';
+  opacity: 1;
+  color: var(--green);
+}
+
+.fund-guru-table thead th.sortable.desc::after {
+  content: ' ▼';
+  opacity: 1;
+  color: var(--green);
+}
+
+/* ====== Sticky table headers ====== */
+
+.table-wrap {
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.table-wrap table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 2;
+}
+
+.table-wrap table thead {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+/* ====== Row hover slide-in ====== */
+
+@keyframes fundRowIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fund-guru-table tbody tr,
+.fund-panel table tbody tr {
+  animation: fundRowIn 0.3s ease both;
+}
+
+.fund-guru-table tbody tr:nth-child(1) { animation-delay: 0.02s; }
+.fund-guru-table tbody tr:nth-child(2) { animation-delay: 0.04s; }
+.fund-guru-table tbody tr:nth-child(3) { animation-delay: 0.06s; }
+.fund-guru-table tbody tr:nth-child(4) { animation-delay: 0.08s; }
+.fund-guru-table tbody tr:nth-child(5) { animation-delay: 0.10s; }
+.fund-guru-table tbody tr:nth-child(n+6) { animation-delay: 0.12s; }
+
+/* ====== Mobile responsive ====== */
+
+@media (max-width: 768px) {
+  .fund-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 16px;
+  }
+
+  .fund-toolbar-right {
+    width: 100%;
+  }
+
+  .fund-toolbar-right button {
+    flex: 1;
+    min-width: 0;
+    justify-content: center;
+  }
+
+  .fund-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .fund-tab {
+    flex: none;
+    white-space: nowrap;
+    padding: 8px 12px;
+    font-size: 0.8125rem;
+  }
+
+  .fund-stats {
+    flex-direction: column;
+  }
+
+  .fund-stat-card {
+    min-width: 100%;
+  }
+
+  .fund-trade-summary {
+    flex-direction: column;
+  }
+
+  .fund-trade-summary .trade-stat {
+    justify-content: space-between;
+  }
+}
