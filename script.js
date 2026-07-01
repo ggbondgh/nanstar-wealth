@@ -182,7 +182,21 @@
     drawer: document.getElementById("transactionDrawer"),
     backdrop: document.getElementById("drawerBackdrop"),
     form: document.getElementById("transactionForm"),
-    toast: document.getElementById("toast")
+    toast: document.getElementById("toast"),
+    fundUpdateTime: document.getElementById("fundUpdateTime"),
+    fundRefreshButton: document.getElementById("fundRefreshButton"),
+    fundImportButton: document.getElementById("fundImportButton"),
+    fundFileInput: document.getElementById("fundFileInput"),
+    fundGuruStats: document.getElementById("fundGuruStats"),
+    fundGuruBody: document.getElementById("fundGuruBody"),
+    fundSectorHolding: document.getElementById("fundSectorHolding"),
+    fundSectorInflow: document.getElementById("fundSectorInflow"),
+    fundSectorOutflow: document.getElementById("fundSectorOutflow"),
+    fundTradeBody: document.getElementById("fundTradeBody"),
+    fundHoldingBody: document.getElementById("fundHoldingBody"),
+    fundHoldingSearch: document.getElementById("fundHoldingSearch"),
+    fundEmpty: document.getElementById("fundEmpty"),
+    fundEmptyImportButton: document.getElementById("fundEmptyImportButton")
   };
 
   let localStateSource = "sample";
@@ -207,6 +221,8 @@
   let analysisSeriesApi = null;
   let instrumentChartApi = null;
   let instrumentSeriesApi = null;
+  let fundData = null;
+  let activeFundTab = "guru";
   let instrumentAreaSeriesApi = null;
   let instrumentCandlesSeriesApi = null;
   let wealthChartLabelApi = null;
@@ -310,6 +326,20 @@
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) syncCloudState();
     });
+
+    // Fund module bindings
+    document.querySelectorAll(".fund-tab").forEach(function (tab) {
+      tab.addEventListener("click", function () { switchFundTab(this.dataset.fundTab); });
+    });
+    els.fundRefreshButton.addEventListener("click", loadFundDataFromFile);
+    els.fundImportButton.addEventListener("click", function () { els.fundFileInput.click(); });
+    els.fundEmptyImportButton.addEventListener("click", function () { els.fundFileInput.click(); });
+    els.fundFileInput.addEventListener("change", function () {
+      if (els.fundFileInput.files && els.fundFileInput.files.length) importFundExcel();
+    });
+    if (els.fundHoldingSearch) {
+      els.fundHoldingSearch.addEventListener("input", function () { renderFundHoldingTable(); });
+    }
 
     const today = new Date().toISOString().slice(0, 10);
     document.getElementById("txDate").value = today;
@@ -699,11 +729,13 @@
       overview: "资产总览",
       holdings: "全部持仓",
       transactions: "交易流水",
-      insights: "复盘与风险"
+      insights: "复盘与风险",
+      funds: "基金达人实盘"
     };
     els.pageTitle.textContent = titles[view] || "资产总览";
     // Scroll to top smoothly when switching views
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (view === "funds") { loadFundDataFromFile(); }
   }
 
   function isBuyAction(action) {
@@ -4247,4 +4279,265 @@
       timer = setTimeout(() => fn(...args), delay);
     };
   }
+
+  // ====== Fund Guru Module ======
+
+  function switchFundTab(tab) {
+    activeFundTab = tab;
+    document.querySelectorAll(".fund-tab").forEach(function (t) {
+      t.classList.toggle("active", t.dataset.fundTab === tab);
+    });
+    document.querySelectorAll(".fund-panel").forEach(function (p) {
+      p.classList.toggle("active", p.dataset.fundPanel === tab);
+    });
+    renderFunds();
+  }
+
+  function loadFundDataFromFile() {
+    els.fundRefreshButton.classList.add("loading");
+    fetch("./output/fund_data.json")
+      .then(function (res) {
+        if (!res.ok) throw new Error("No data");
+        return res.json();
+      })
+      .then(function (data) {
+        fundData = data;
+        els.fundUpdateTime.textContent = "数据更新：" + (data.updateTime || "--");
+        els.fundEmpty.hidden = true;
+        renderFunds();
+      })
+      .catch(function () {
+        fundData = null;
+        els.fundUpdateTime.textContent = "数据来源：待生成（运行 scrape.py）";
+      })
+      .finally(function () {
+        els.fundRefreshButton.classList.remove("loading");
+        renderFunds();
+      });
+  }
+
+  function importFundExcel() {
+    var file = els.fundFileInput.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      try {
+        var wb = XLSX.read(e.target.result, { type: "array" });
+        var guruSheet = wb.Sheets["达人汇总"];
+        var tradeSheet = wb.Sheets["交易明细"];
+        var holdingSheet = wb.Sheets["持仓明细"];
+        var sectorSheet = wb.Sheets["板块分布"];
+
+        if (!guruSheet) { showToast("未找到'达人汇总'工作表"); return; }
+
+        var guruJson = XLSX.utils.sheet_to_json(guruSheet, { header: 1 });
+        var gurus = [];
+        for (var i = 1; i < guruJson.length; i++) {
+          var row = guruJson[i];
+          if (!row[0]) continue;
+          gurus.push({
+            name: row[0],
+            totalValue: row[1],
+            returnRate: row[2],
+            heavySector: row[3],
+            heavyRatio: row[4],
+            sectorCount: row[5],
+            lastTrade: row[6]
+          });
+        }
+
+        var trades = [];
+        if (tradeSheet) {
+          var tradeJson = XLSX.utils.sheet_to_json(tradeSheet, { header: 1 });
+          var currentName = "";
+          for (var j = 1; j < tradeJson.length; j++) {
+            var tr = tradeJson[j];
+            if (tr[0]) currentName = tr[0];
+            if (!tr[3]) continue;
+            trades.push({
+              name: currentName,
+              time: tr[1] || "",
+              action: tr[2] || "",
+              fundName: tr[3] || "",
+              shares: tr[4],
+              amount: tr[5],
+              ratio: tr[6]
+            });
+          }
+        }
+
+        var holdings = [];
+        if (holdingSheet) {
+          var holdingJson = XLSX.utils.sheet_to_json(holdingSheet, { header: 1 });
+          var hName = "";
+          for (var k = 1; k < holdingJson.length; k++) {
+            var hr = holdingJson[k];
+            if (hr[0]) hName = hr[0];
+            if (!hr[1]) continue;
+            holdings.push({
+              name: hName,
+              fundName: hr[1],
+              sector: hr[2] || "--",
+              amount: hr[3],
+              ratio: hr[4],
+              profit: hr[5],
+              profitRate: hr[6]
+            });
+          }
+        }
+
+        var sectors = { holding: [], inflow: [], outflow: [] };
+        if (sectorSheet) {
+          var secJson = XLSX.utils.sheet_to_json(sectorSheet, { header: 1 });
+          // Parse sector distribution (simplified: rows 3-11 col A/B, D/E, G/H)
+          for (var si = 3; si < Math.min(secJson.length, 12); si++) {
+            var sr = secJson[si];
+            if (sr[0] && sr[0] !== "其他") sectors.holding.push({ name: sr[0], ratio: number(sr[1]) });
+            if (sr[3] && sr[3] !== "其他") sectors.inflow.push({ name: sr[3], ratio: number(sr[4]) });
+            if (sr[6] && sr[6] !== "其他") sectors.outflow.push({ name: sr[6], ratio: number(sr[7]) });
+          }
+        }
+
+        fundData = {
+          updateTime: new Date().toISOString().slice(0, 16).replace("T", " "),
+          gurus: gurus,
+          trades: trades,
+          holdings: holdings,
+          sectors: sectors
+        };
+        els.fundUpdateTime.textContent = "数据更新：" + fundData.updateTime;
+        els.fundEmpty.hidden = true;
+        showToast("已导入 " + gurus.length + " 位达人数据");
+        renderFunds();
+      } catch (err) {
+        showToast("Excel 解析失败：" + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    els.fundFileInput.value = "";
+  }
+
+  function renderFunds() {
+    if (!fundData || !fundData.gurus) {
+      els.fundEmpty.hidden = false;
+      return;
+    }
+    els.fundEmpty.hidden = true;
+    renderFundGuruTable();
+    renderFundSectorView();
+    renderFundTradeTable();
+    renderFundHoldingTable();
+  }
+
+  function renderFundGuruTable() {
+    var gurus = fundData.gurus;
+    if (!gurus || !gurus.length) return;
+
+    var sorted = gurus.slice().sort(function (a, b) { return number(b.totalValue) - number(a.totalValue); });
+
+    // Stats
+    var totalAsset = sorted.reduce(function (s, g) { return s + number(g.totalValue); }, 0);
+    var avgReturn = sorted.reduce(function (s, g) { return s + number(g.returnRate); }, 0) / sorted.length;
+    els.fundGuruStats.innerHTML =
+      '<div class="fund-stat-card"><span class="stat-label">跟踪达人</span><span class="stat-value">' + sorted.length + ' 位</span></div>' +
+      '<div class="fund-stat-card"><span class="stat-label">总持仓规模</span><span class="stat-value">' + shortMoney(totalAsset) + '</span></div>' +
+      '<div class="fund-stat-card"><span class="stat-label">平均收益率</span><span class="stat-value ' + (avgReturn >= 0 ? 'guru-return-positive' : 'guru-return-negative') + '">' + percent(avgReturn) + '</span></div>';
+
+    var html = "";
+    sorted.forEach(function (guru, idx) {
+      var rank = idx + 1;
+      var rankClass = rank <= 3 ? " top3" : "";
+      var retClass = number(guru.returnRate) >= 0 ? "guru-return-positive" : "guru-return-negative";
+      var sector = guru.heavySector;
+      var sectorClass = sector && sector !== "--" ? " primary" : "";
+      html += "<tr>" +
+        "<td><span class=\"fund-guru-rank" + rankClass + "\">" + rank + "</span></td>" +
+        "<td><span class=\"fund-guru-name\">" + escapeHtml(guru.name) + "</span></td>" +
+        "<td>" + money(number(guru.totalValue)) + "</td>" +
+        "<td class=\"" + retClass + "\">" + percent(number(guru.returnRate)) + "</td>" +
+        "<td><span class=\"fund-sector-tag" + sectorClass + "\">" + escapeHtml(String(sector || "--")) + "</span></td>" +
+        "<td>" + (guru.heavyRatio != null ? percent(number(guru.heavyRatio)) : "--") + "</td>" +
+        "<td>" + (guru.sectorCount || "--") + "</td>" +
+        "<td>" + escapeHtml(String(guru.lastTrade || "--")) + "</td>" +
+        "</tr>";
+    });
+    els.fundGuruBody.innerHTML = html;
+  }
+
+  function renderFundSectorView() {
+    var sectors = fundData.sectors;
+    if (!sectors) return;
+
+    renderSectorList(els.fundSectorHolding, sectors.holding || [], "holding", "violet");
+    renderSectorList(els.fundSectorInflow, sectors.inflow || [], "inflow", "red");
+    renderSectorList(els.fundSectorOutflow, sectors.outflow || [], "outflow", "green");
+  }
+
+  function renderSectorList(el, items, type, color) {
+    if (!el || !items.length) return;
+    var maxRatio = items.reduce(function (m, i) { return Math.max(m, number(i.ratio)); }, 0);
+    var html = "";
+    items.forEach(function (item) {
+      var pct = maxRatio > 0 ? (number(item.ratio) / maxRatio * 100).toFixed(0) : 0;
+      html += "<div class=\"fund-sector-item\">" +
+        "<span class=\"sector-name\">" + escapeHtml(item.name) + "</span>" +
+        "<span class=\"sector-bar-wrap\"><span class=\"sector-bar-fill " + type + "\" style=\"width:" + pct + "%\"></span></span>" +
+        "<span class=\"sector-val\">" + percent(number(item.ratio)) + "</span>" +
+        "</div>";
+    });
+    el.innerHTML = html;
+  }
+
+  function renderFundTradeTable() {
+    var trades = fundData.trades;
+    if (!trades || !trades.length) { els.fundTradeBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:32px">暂无今日交易数据</td></tr>'; return; }
+
+    var html = "";
+    trades.forEach(function (t) {
+      var isBuy = t.action.indexOf("买入") !== -1 || t.action.indexOf("定投") !== -1;
+      var isSell = t.action.indexOf("卖出") !== -1;
+      var isConvert = t.action.indexOf("转换") !== -1;
+      var badgeClass = isConvert ? "convert" : isSell ? "sell" : isBuy ? "buy" : "auto";
+      var detail = t.amount ? money(number(t.amount)) : (t.shares ? number(t.shares).toFixed(0) + " 份" : "--");
+      html += "<tr>" +
+        "<td><span class=\"fund-guru-name\">" + escapeHtml(t.name) + "</span></td>" +
+        "<td>" + escapeHtml(String(t.time || "--")) + "</td>" +
+        "<td><span class=\"fund-action-badge " + badgeClass + "\">" + escapeHtml(t.action) + "</span></td>" +
+        "<td>" + escapeHtml(String(t.fundName || "--")) + "</td>" +
+        "<td>" + detail + "</td>" +
+        "<td>" + (t.ratio != null ? (number(t.ratio) >= 1 ? t.ratio + "%" : percent(number(t.ratio))) : "--") + "</td>" +
+        "</tr>";
+    });
+    els.fundTradeBody.innerHTML = html;
+  }
+
+  function renderFundHoldingTable() {
+    var holdings = fundData.holdings;
+    if (!holdings || !holdings.length) { els.fundHoldingBody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:32px">暂无持仓明细数据</td></tr>'; return; }
+
+    var search = els.fundHoldingSearch ? els.fundHoldingSearch.value.trim().toLowerCase() : "";
+
+    var filtered = holdings;
+    if (search) {
+      filtered = holdings.filter(function (h) {
+        return h.name.toLowerCase().indexOf(search) !== -1 || h.fundName.toLowerCase().indexOf(search) !== -1;
+      });
+    }
+
+    var html = "";
+    filtered.forEach(function (h) {
+      var retClass = number(h.profitRate) >= 0 ? "guru-return-positive" : "guru-return-negative";
+      html += "<tr>" +
+        "<td><span class=\"fund-guru-name\">" + escapeHtml(h.name) + "</span></td>" +
+        "<td>" + escapeHtml(String(h.fundName || "--")) + "</td>" +
+        "<td><span class=\"fund-sector-tag\">" + escapeHtml(String(h.sector || "--")) + "</span></td>" +
+        "<td>" + money(number(h.amount)) + "</td>" +
+        "<td>" + (h.ratio != null ? percent(number(h.ratio)) : "--") + "</td>" +
+        "<td class=\"" + retClass + "\">" + moneySigned(number(h.profit)) + "</td>" +
+        "<td class=\"" + retClass + "\">" + percent(number(h.profitRate)) + "</td>" +
+        "</tr>";
+    });
+    els.fundHoldingBody.innerHTML = html;
+  }
+
 })();

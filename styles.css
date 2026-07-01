@@ -2267,3 +2267,343 @@ textarea:focus {
     max-width: 180px;
   }
 }
+
+/* ====== 基金达人模块 ====== */
+
+.fund-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.fund-toolbar-left h3 {
+  margin: 0 0 2px;
+  font-size: 1.125rem;
+  color: var(--text);
+}
+
+.fund-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.fund-meta {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+/* Fund sub-tabs */
+.fund-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+}
+
+.fund-tab {
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-family: var(--font-ui);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.fund-tab:hover {
+  color: var(--text);
+  background: var(--bg-soft);
+}
+
+.fund-tab.active {
+  background: var(--green);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+/* Fund panels */
+.fund-panel {
+  display: none;
+  animation: viewFadeIn var(--transition-slow) ease;
+}
+
+.fund-panel.active {
+  display: block;
+}
+
+/* Fund stats row */
+.fund-stats {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.fund-stat-card {
+  flex: 1;
+  min-width: 140px;
+  padding: 14px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.fund-stat-card .stat-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fund-stat-card .stat-value {
+  display: block;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-top: 4px;
+  font-family: var(--font-mono);
+}
+
+/* Guru table */
+.fund-guru-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.fund-guru-table thead th {
+  padding: 10px 12px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: left;
+  border-bottom: 2px solid var(--line);
+  white-space: nowrap;
+}
+
+.fund-guru-table thead th:first-child { width: 40px; }
+.fund-guru-table thead th:last-child { width: 150px; }
+
+.fund-guru-table tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.8125rem;
+  font-family: var(--font-mono);
+}
+
+.fund-guru-table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.fund-guru-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.fund-guru-rank.top3 {
+  background: var(--amber-glow);
+  color: var(--amber);
+}
+
+.fund-guru-name {
+  font-family: var(--font-ui);
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* Sector tags */
+.fund-sector-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: var(--surface-3);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.fund-sector-tag.primary {
+  background: var(--green-glow);
+  color: var(--green);
+}
+
+/* Return rate colors - Chinese convention: rise=red, fall=green */
+.guru-return-positive {
+  color: #fb7185;
+  font-weight: 600;
+}
+
+.guru-return-negative {
+  color: #34d399;
+  font-weight: 600;
+}
+
+/* Trade action badges */
+.fund-action-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fund-action-badge.buy {
+  background: rgba(251, 113, 133, 0.12);
+  color: #fb7185;
+}
+
+.fund-action-badge.sell {
+  background: rgba(52, 211, 153, 0.12);
+  color: #34d399;
+}
+
+.fund-action-badge.auto {
+  background: rgba(96, 165, 250, 0.12);
+  color: #60a5fa;
+}
+
+.fund-action-badge.convert {
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+}
+
+/* Sector distribution bars */
+.fund-sector-list {
+  padding: 8px 0;
+}
+
+.fund-sector-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.fund-sector-item .sector-name {
+  width: 90px;
+  font-size: 0.8125rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.fund-sector-item .sector-bar-wrap {
+  flex: 1;
+  height: 18px;
+  background: var(--surface-2);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.fund-sector-item .sector-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width var(--transition-slow);
+}
+
+.fund-sector-item .sector-val {
+  width: 48px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.sector-bar-fill.holding { background: var(--violet); }
+.sector-bar-fill.inflow { background: #fb7185; }
+.sector-bar-fill.outflow { background: #34d399; }
+
+/* Fund holding filters */
+.fund-holding-filters {
+  margin-bottom: 16px;
+}
+
+.fund-holding-filters input {
+  width: 100%;
+  max-width: 360px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.875rem;
+  font-family: var(--font-ui);
+}
+
+.fund-holding-filters input::placeholder {
+  color: var(--muted);
+}
+
+/* Fund empty state */
+.fund-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 48px;
+  background: var(--surface);
+  border: 2px dashed var(--line);
+  border-radius: var(--radius-lg);
+  max-width: 420px;
+}
+
+.empty-state h3 {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 1.125rem;
+}
+
+.empty-state p {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+/* Fund refresh button spin */
+#fundRefreshButton.loading {
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+@keyframes fundSpin {
+  to { transform: rotate(360deg); }
+}
+
+#fundRefreshButton.loading::before {
+  content: '⏳ ';
+  display: inline-block;
+  animation: fundSpin 1s linear infinite;
+}

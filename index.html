@@ -37,6 +37,10 @@
             <span>🔍 复盘</span>
             <small>策略标签与风险</small>
           </button>
+          <button class="nav-item" type="button" data-view="funds">
+            <span>🏦 基金</span>
+            <small>达人实盘追踪</small>
+          </button>
         </nav>
 
         <section class="side-panel">
@@ -338,6 +342,124 @@
               <div class="note-list" id="noteList"></div>
             </section>
           </div>
+        </section>
+
+        <section class="view" data-panel="funds">
+          <div class="fund-toolbar">
+            <div class="fund-toolbar-left">
+              <p class="eyebrow">Fund Guru Tracker</p>
+              <h3>🐜 蚂蚁财富达人实盘</h3>
+            </div>
+            <div class="fund-toolbar-right">
+              <span class="fund-meta" id="fundUpdateTime">数据来源：待加载</span>
+              <button class="ghost-button" id="fundRefreshButton" type="button">🔄 刷新数据</button>
+              <button class="ghost-button" id="fundImportButton" type="button">📂 导入 Excel</button>
+              <input id="fundFileInput" type="file" accept=".xls,.xlsx" hidden />
+            </div>
+          </div>
+
+          <div class="fund-tabs" aria-label="基金达人子视图">
+            <button class="fund-tab active" type="button" data-fund-tab="guru">达人总榜</button>
+            <button class="fund-tab" type="button" data-fund-tab="sector">板块热力图</button>
+            <button class="fund-tab" type="button" data-fund-tab="trades">今日操作</button>
+            <button class="fund-tab" type="button" data-fund-tab="holdings">持仓穿透</button>
+          </div>
+
+          <!-- 达人总榜 -->
+          <section class="fund-panel active" data-fund-panel="guru">
+            <div class="fund-stats" id="fundGuruStats"></div>
+            <div class="table-wrap">
+              <table class="fund-guru-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>达人名称</th>
+                    <th>持仓总额</th>
+                    <th>持仓收益率</th>
+                    <th>重仓板块</th>
+                    <th>重仓占比</th>
+                    <th>板块数</th>
+                    <th>最近交易</th>
+                  </tr>
+                </thead>
+                <tbody id="fundGuruBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- 板块热力图 -->
+          <section class="fund-panel" data-fund-panel="sector">
+            <div class="workspace-grid">
+              <section class="panel span-4">
+                <div class="panel-head">
+                  <h3>达人持仓板块分布</h3>
+                </div>
+                <div class="fund-sector-list" id="fundSectorHolding"></div>
+              </section>
+              <section class="panel span-4">
+                <div class="panel-head">
+                  <h3>今日资金流入板块</h3>
+                </div>
+                <div class="fund-sector-list" id="fundSectorInflow"></div>
+              </section>
+              <section class="panel span-4">
+                <div class="panel-head">
+                  <h3>今日资金流出板块</h3>
+                </div>
+                <div class="fund-sector-list" id="fundSectorOutflow"></div>
+              </section>
+            </div>
+          </section>
+
+          <!-- 今日操作 -->
+          <section class="fund-panel" data-fund-panel="trades">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>达人名称</th>
+                    <th>时间</th>
+                    <th>动作</th>
+                    <th>基金名称</th>
+                    <th>份额/金额</th>
+                    <th>仓位占比</th>
+                  </tr>
+                </thead>
+                <tbody id="fundTradeBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <!-- 持仓穿透 -->
+          <section class="fund-panel" data-fund-panel="holdings">
+            <div class="fund-holding-filters" id="fundHoldingFilters">
+              <input type="text" id="fundHoldingSearch" placeholder="搜索达人名称或基金名称..." />
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>达人名称</th>
+                    <th>基金名称</th>
+                    <th>板块</th>
+                    <th>持有金额</th>
+                    <th>持仓占比</th>
+                    <th>持有收益</th>
+                    <th>持有收益率</th>
+                  </tr>
+                </thead>
+                <tbody id="fundHoldingBody"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="fund-empty" id="fundEmpty" hidden>
+            <div class="empty-state">
+              <h3>暂无达人数据</h3>
+              <p>请导入 Excel 文件，或运行 fund_scraper/scrape.py 脚本生成 fund_data.json</p>
+              <button class="primary-button" id="fundEmptyImportButton" type="button">📂 导入 Excel 文件</button>
+            </div>
+          </section>
         </section>
       </main>
     </div>

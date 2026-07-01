@@ -12,5 +12,6 @@ __pycache__/
 tools/guosen-sync/config.json
 tools/guosen-sync/local_*.py
 tools/guosen-sync/local_*.json
+fund_scraper/config.json
 .vscode/
 .idea/
