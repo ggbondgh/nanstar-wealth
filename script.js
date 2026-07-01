@@ -196,7 +196,8 @@
     fundHoldingBody: document.getElementById("fundHoldingBody"),
     fundHoldingSearch: document.getElementById("fundHoldingSearch"),
     fundEmpty: document.getElementById("fundEmpty"),
-    fundEmptyImportButton: document.getElementById("fundEmptyImportButton")
+    fundEmptyImportButton: document.getElementById("fundEmptyImportButton"),
+    fundExportButton: document.getElementById("fundExportButton")
   };
 
   let localStateSource = "sample";
@@ -333,6 +334,7 @@
     });
     els.fundRefreshButton.addEventListener("click", loadFundDataFromFile);
     els.fundImportButton.addEventListener("click", function () { els.fundFileInput.click(); });
+    els.fundExportButton.addEventListener("click", exportFundExcel);
     els.fundEmptyImportButton.addEventListener("click", function () { els.fundFileInput.click(); });
     els.fundFileInput.addEventListener("change", function () {
       if (els.fundFileInput.files && els.fundFileInput.files.length) importFundExcel();
@@ -4538,6 +4540,111 @@
         "</tr>";
     });
     els.fundHoldingBody.innerHTML = html;
+  }
+
+  function exportFundExcel() {
+    if (!fundData || !fundData.gurus || !fundData.gurus.length) {
+      showToast("暂无数据可导出");
+      return;
+    }
+
+    try {
+      var wb = XLSX.utils.book_new();
+
+      // ---- Sheet 1: 达人汇总 ----
+      var guruRows = [["达人名称", "持仓总额", "持仓收益率", "重仓板块", "重仓占比", "持仓板块数", "最近交易时间"]];
+      var sorted = fundData.gurus.slice().sort(function (a, b) { return number(b.totalValue) - number(a.totalValue); });
+      sorted.forEach(function (g) {
+        guruRows.push([
+          g.name,
+          number(g.totalValue),
+          number(g.returnRate),
+          g.heavySector || "--",
+          g.heavyRatio != null ? number(g.heavyRatio) : "--",
+          g.sectorCount || 0,
+          g.lastTrade || "--"
+        ]);
+      });
+      var guruWs = XLSX.utils.aoa_to_sheet(guruRows);
+      guruWs["!cols"] = [{wch: 22}, {wch: 14}, {wch: 14}, {wch: 16}, {wch: 12}, {wch: 12}, {wch: 22}];
+      XLSX.utils.book_append_sheet(wb, guruWs, "达人汇总");
+
+      // ---- Sheet 2: 板块分布 ----
+      var sectorRows = [
+        ["", "", "", "", "", "", "", ""],
+        ["达人持仓板块分布", "", "", "达人资金流入板块分布（" + (fundData.updateTime || "").slice(0, 10) + "）", "", "", "达人资金流出板块分布（" + (fundData.updateTime || "").slice(0, 10) + "）", ""],
+        ["板块名称", "比重", "", "板块名称", "比重", "", "板块名称", "比重"]
+      ];
+      var sec = fundData.sectors || {};
+      var holdingArr = sec.holding || [];
+      var inflowArr = sec.inflow || [];
+      var outflowArr = sec.outflow || [];
+      var maxRows = Math.max(holdingArr.length, inflowArr.length, outflowArr.length, 1);
+      for (var si = 0; si < maxRows; si++) {
+        sectorRows.push([
+          holdingArr[si] ? holdingArr[si].name : "",
+          holdingArr[si] ? number(holdingArr[si].ratio) : "",
+          "",
+          inflowArr[si] ? inflowArr[si].name : "",
+          inflowArr[si] ? number(inflowArr[si].ratio) : "",
+          "",
+          outflowArr[si] ? outflowArr[si].name : "",
+          outflowArr[si] ? number(outflowArr[si].ratio) : ""
+        ]);
+      }
+      var sectorWs = XLSX.utils.aoa_to_sheet(sectorRows);
+      sectorWs["!cols"] = [{wch: 18}, {wch: 12}, {wch: 4}, {wch: 18}, {wch: 12}, {wch: 4}, {wch: 18}, {wch: 12}];
+      XLSX.utils.book_append_sheet(wb, sectorWs, "板块分布");
+
+      // ---- Sheet 3: 交易明细 ----
+      var tradeRows = [["达人名称", "事件时间", "动作", "基金名称", "份额(份)", "金额(元)", "仓位占比"]];
+      var trades = fundData.trades || [];
+      var prevTradeName = "";
+      trades.forEach(function (t) {
+        var rowName = t.name !== prevTradeName ? t.name : "";
+        prevTradeName = t.name;
+        tradeRows.push([
+          rowName,
+          t.time || "",
+          t.action || "",
+          t.fundName || "",
+          t.shares != null ? t.shares : "",
+          t.amount != null ? t.amount : "",
+          t.ratio != null ? t.ratio : ""
+        ]);
+      });
+      var tradeWs = XLSX.utils.aoa_to_sheet(tradeRows);
+      tradeWs["!cols"] = [{wch: 22}, {wch: 22}, {wch: 18}, {wch: 36}, {wch: 12}, {wch: 12}, {wch: 10}];
+      XLSX.utils.book_append_sheet(wb, tradeWs, "交易明细");
+
+      // ---- Sheet 4: 持仓明细 ----
+      var holdingRows = [["达人名称", "基金名称", "基金板块", "持有金额", "持仓占比", "持有收益", "持有收益率"]];
+      var holdings = fundData.holdings || [];
+      var prevHoldingName = "";
+      holdings.forEach(function (h) {
+        var rowName = h.name !== prevHoldingName ? h.name : "";
+        prevHoldingName = h.name;
+        holdingRows.push([
+          rowName,
+          h.fundName || "",
+          h.sector || "--",
+          number(h.amount),
+          h.ratio != null ? number(h.ratio) : "",
+          number(h.profit),
+          number(h.profitRate)
+        ]);
+      });
+      var holdingWs = XLSX.utils.aoa_to_sheet(holdingRows);
+      holdingWs["!cols"] = [{wch: 22}, {wch: 36}, {wch: 16}, {wch: 14}, {wch: 12}, {wch: 14}, {wch: 14}];
+      XLSX.utils.book_append_sheet(wb, holdingWs, "持仓明细");
+
+      // Download
+      var today = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(wb, "蚂蚁财富达人实盘_" + today + ".xlsx");
+      showToast("已导出 " + fundData.guruCount + " 位达人数据");
+    } catch (err) {
+      showToast("导出失败：" + err.message);
+    }
   }
 
 })();
