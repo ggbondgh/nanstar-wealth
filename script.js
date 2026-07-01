@@ -4550,97 +4550,155 @@
 
     try {
       var wb = XLSX.utils.book_new();
-
-      // ---- Sheet 1: 达人汇总 ----
-      var guruRows = [["达人名称", "持仓总额", "持仓收益率", "重仓板块", "重仓占比", "持仓板块数", "最近交易时间"]];
+      var today = fundData.updateTime ? fundData.updateTime.slice(0, 10) : new Date().toISOString().slice(0, 10);
       var sorted = fundData.gurus.slice().sort(function (a, b) { return number(b.totalValue) - number(a.totalValue); });
+
+      // ======== Sheet 1: 达人汇总 ========
+      var guruRows = [["达人名称", "持仓总额", "持仓收益率", "重仓板块", "重仓占比", "持仓板块数", "最近交易时间"]];
       sorted.forEach(function (g) {
-        guruRows.push([
-          g.name,
-          number(g.totalValue),
-          number(g.returnRate),
-          g.heavySector || "--",
-          g.heavyRatio != null ? number(g.heavyRatio) : "--",
-          g.sectorCount || 0,
-          g.lastTrade || "--"
-        ]);
+        guruRows.push([g.name, number(g.totalValue), number(g.returnRate), g.heavySector || "--", g.heavyRatio != null ? number(g.heavyRatio) : null, g.sectorCount || 0, g.lastTrade || "--"]);
       });
       var guruWs = XLSX.utils.aoa_to_sheet(guruRows);
-      guruWs["!cols"] = [{wch: 22}, {wch: 14}, {wch: 14}, {wch: 16}, {wch: 12}, {wch: 12}, {wch: 22}];
+      // Apply styles
+      for (var gr = 0; gr < guruRows.length; gr++) {
+        var isHead = gr === 0;
+        for (var gc = 0; gc < 7; gc++) {
+          var cellRef = XLSX.utils.encode_cell({ r: gr, c: gc });
+          if (!guruWs[cellRef]) continue;
+          var style;
+          if (isHead) {
+            style = { font: { name: "方正楷体", sz: 11, bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "0F4C6E" } }, alignment: { horizontal: "center", vertical: "center" } };
+          } else {
+            // col 0=name(方正楷体 center), 1=money(right,#,##0), 2=pct(right,0.00%), 3=sector(方正楷体 center), 4=pct, 5=int, 6=time
+            if (gc === 1) {
+              style = { font: { name: "Times New Roman", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "right", vertical: "center" }, numFmt: "#,##0" };
+            } else if (gc === 2 || gc === 4) {
+              style = { font: { name: "Times New Roman", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "right", vertical: "center" }, numFmt: "0.00%" };
+            } else if (gc === 5) {
+              style = { font: { name: "Times New Roman", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "center", vertical: "center" }, numFmt: "0" };
+            } else if (gc === 6) {
+              style = { font: { name: "Times New Roman", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "center", vertical: "center" } };
+            } else {
+              style = { font: { name: "方正楷体", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "center", vertical: "center" } };
+            }
+          }
+          guruWs[cellRef].s = style;
+        }
+      }
+      guruWs["!cols"] = [{ wch: 27 }, { wch: 16 }, { wch: 12 }, { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 20 }];
       XLSX.utils.book_append_sheet(wb, guruWs, "达人汇总");
 
-      // ---- Sheet 2: 板块分布 ----
-      var sectorRows = [
-        ["", "", "", "", "", "", "", ""],
-        ["达人持仓板块分布", "", "", "达人资金流入板块分布（" + (fundData.updateTime || "").slice(0, 10) + "）", "", "", "达人资金流出板块分布（" + (fundData.updateTime || "").slice(0, 10) + "）", ""],
-        ["板块名称", "比重", "", "板块名称", "比重", "", "板块名称", "比重"]
-      ];
+      // ======== Sheet 2: 板块分布 ========
       var sec = fundData.sectors || {};
-      var holdingArr = sec.holding || [];
-      var inflowArr = sec.inflow || [];
-      var outflowArr = sec.outflow || [];
-      var maxRows = Math.max(holdingArr.length, inflowArr.length, outflowArr.length, 1);
-      for (var si = 0; si < maxRows; si++) {
-        sectorRows.push([
-          holdingArr[si] ? holdingArr[si].name : "",
-          holdingArr[si] ? number(holdingArr[si].ratio) : "",
+      var hArr = sec.holding || [];
+      var iArr = sec.inflow || [];
+      var oArr = sec.outflow || [];
+      var secRows = [];
+      secRows.push(["", "", "", "", "", "", "", ""]);
+      secRows.push(["达人持仓板块分布", "", "", "达人资金流入板块分布（" + today + "）", "", "", "达人资金流出板块分布（" + today + "）", ""]);
+      secRows.push(["板块名称", "比重", "", "板块名称", "比重", "", "板块名称", "比重"]);
+      var maxSR = Math.max(hArr.length, iArr.length, oArr.length, 1);
+      for (var si = 0; si < maxSR; si++) {
+        secRows.push([
+          hArr[si] ? hArr[si].name : "", hArr[si] ? number(hArr[si].ratio) : "",
           "",
-          inflowArr[si] ? inflowArr[si].name : "",
-          inflowArr[si] ? number(inflowArr[si].ratio) : "",
+          iArr[si] ? iArr[si].name : "", iArr[si] ? number(iArr[si].ratio) : "",
           "",
-          outflowArr[si] ? outflowArr[si].name : "",
-          outflowArr[si] ? number(outflowArr[si].ratio) : ""
+          oArr[si] ? oArr[si].name : "", oArr[si] ? number(oArr[si].ratio) : ""
         ]);
       }
-      var sectorWs = XLSX.utils.aoa_to_sheet(sectorRows);
-      sectorWs["!cols"] = [{wch: 18}, {wch: 12}, {wch: 4}, {wch: 18}, {wch: 12}, {wch: 4}, {wch: 18}, {wch: 12}];
+      var sectorWs = XLSX.utils.aoa_to_sheet(secRows);
+      // Row 1: title row
+      for (var sc = 0; sc < 8; sc++) {
+        if (sc === 0 || sc === 3 || sc === 6) {
+          var cr1 = XLSX.utils.encode_cell({ r: 1, c: sc });
+          if (sectorWs[cr1]) sectorWs[cr1].s = { font: { name: "Carlito", sz: 11, bold: true }, fill: { fgColor: { rgb: "DCECF8" } }, alignment: { horizontal: "center", vertical: "center" } };
+        }
+      }
+      // Row 2: header row
+      for (var sc2 = 0; sc2 < 8; sc2++) {
+        var cr2 = XLSX.utils.encode_cell({ r: 2, c: sc2 });
+        if (sectorWs[cr2]) sectorWs[cr2].s = { font: { name: "方正楷体", sz: 11, bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "0F4C6E" } }, alignment: { horizontal: "center", vertical: "center" } };
+      }
+      // Data rows
+      for (var sr = 3; sr < secRows.length; sr++) {
+        for (var sc3 = 0; sc3 < 8; sc3++) {
+          var cr3 = XLSX.utils.encode_cell({ r: sr, c: sc3 });
+          if (!sectorWs[cr3]) continue;
+          if (sc3 === 1 || sc3 === 4 || sc3 === 7) {
+            sectorWs[cr3].s = { font: { name: "Times New Roman", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "right", vertical: "center" }, numFmt: "0.00%" };
+          } else if (sc3 === 0 || sc3 === 3 || sc3 === 6) {
+            sectorWs[cr3].s = { font: { name: "方正楷体", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "center", vertical: "center" } };
+          }
+        }
+      }
+      sectorWs["!cols"] = [{ wch: 20 }, { wch: 12 }, { wch: 3 }, { wch: 32 }, { wch: 12 }, { wch: 3 }, { wch: 32 }, { wch: 12 }];
       XLSX.utils.book_append_sheet(wb, sectorWs, "板块分布");
 
-      // ---- Sheet 3: 交易明细 ----
+      // ======== Sheet 3: 交易明细 ========
       var tradeRows = [["达人名称", "事件时间", "动作", "基金名称", "份额(份)", "金额(元)", "仓位占比"]];
       var trades = fundData.trades || [];
-      var prevTradeName = "";
+      var ptName = "";
       trades.forEach(function (t) {
-        var rowName = t.name !== prevTradeName ? t.name : "";
-        prevTradeName = t.name;
-        tradeRows.push([
-          rowName,
-          t.time || "",
-          t.action || "",
-          t.fundName || "",
-          t.shares != null ? t.shares : "",
-          t.amount != null ? t.amount : "",
-          t.ratio != null ? t.ratio : ""
-        ]);
+        var rn = t.name !== ptName ? t.name : "";
+        ptName = t.name;
+        tradeRows.push([rn, t.time || "", t.action || "", t.fundName || "", t.shares != null ? number(t.shares) : null, t.amount != null ? number(t.amount) : null, t.ratio != null ? number(t.ratio) : null]);
       });
       var tradeWs = XLSX.utils.aoa_to_sheet(tradeRows);
-      tradeWs["!cols"] = [{wch: 22}, {wch: 22}, {wch: 18}, {wch: 36}, {wch: 12}, {wch: 12}, {wch: 10}];
+      for (var tr = 0; tr < tradeRows.length; tr++) {
+        for (var tc = 0; tc < 7; tc++) {
+          var tCell = XLSX.utils.encode_cell({ r: tr, c: tc });
+          if (!tradeWs[tCell]) continue;
+          var tStyle;
+          if (tr === 0) {
+            tStyle = { font: { name: "方正楷体", sz: 11, bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "0F4C6E" } }, alignment: { horizontal: "center", vertical: "center" } };
+          } else if (tc === 4 || tc === 5) {
+            tStyle = { font: { name: "Times New Roman", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "right", vertical: "center" }, numFmt: "#,##0" };
+          } else if (tc === 6) {
+            tStyle = { font: { name: "Times New Roman", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "right", vertical: "center" }, numFmt: "0%" };
+          } else if (tc === 1) {
+            tStyle = { font: { name: "Times New Roman", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "center", vertical: "center" } };
+          } else {
+            tStyle = { font: { name: "方正楷体", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "center", vertical: "center" } };
+          }
+          tradeWs[tCell].s = tStyle;
+        }
+      }
+      tradeWs["!cols"] = [{ wch: 22 }, { wch: 20 }, { wch: 18 }, { wch: 38 }, { wch: 14 }, { wch: 14 }, { wch: 12 }];
       XLSX.utils.book_append_sheet(wb, tradeWs, "交易明细");
 
-      // ---- Sheet 4: 持仓明细 ----
+      // ======== Sheet 4: 持仓明细 ========
       var holdingRows = [["达人名称", "基金名称", "基金板块", "持有金额", "持仓占比", "持有收益", "持有收益率"]];
       var holdings = fundData.holdings || [];
-      var prevHoldingName = "";
+      var phName = "";
       holdings.forEach(function (h) {
-        var rowName = h.name !== prevHoldingName ? h.name : "";
-        prevHoldingName = h.name;
-        holdingRows.push([
-          rowName,
-          h.fundName || "",
-          h.sector || "--",
-          number(h.amount),
-          h.ratio != null ? number(h.ratio) : "",
-          number(h.profit),
-          number(h.profitRate)
-        ]);
+        var rn = h.name !== phName ? h.name : "";
+        phName = h.name;
+        holdingRows.push([rn, h.fundName || "", h.sector || "--", number(h.amount), h.ratio != null ? number(h.ratio) : null, number(h.profit), number(h.profitRate)]);
       });
       var holdingWs = XLSX.utils.aoa_to_sheet(holdingRows);
-      holdingWs["!cols"] = [{wch: 22}, {wch: 36}, {wch: 16}, {wch: 14}, {wch: 12}, {wch: 14}, {wch: 14}];
+      for (var hr = 0; hr < holdingRows.length; hr++) {
+        for (var hc = 0; hc < 7; hc++) {
+          var hCell = XLSX.utils.encode_cell({ r: hr, c: hc });
+          if (!holdingWs[hCell]) continue;
+          var hStyle;
+          if (hr === 0) {
+            hStyle = { font: { name: "方正楷体", sz: 11, bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "0F4C6E" } }, alignment: { horizontal: "center", vertical: "center" } };
+          } else if (hc === 3 || hc === 5) {
+            hStyle = { font: { name: "Times New Roman", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "right", vertical: "center" }, numFmt: "#,##0" };
+          } else if (hc === 4 || hc === 6) {
+            hStyle = { font: { name: "Times New Roman", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "right", vertical: "center" }, numFmt: "0.00%" };
+          } else {
+            hStyle = { font: { name: "方正楷体", sz: 11 }, fill: { fgColor: { rgb: "F7FCFF" } }, alignment: { horizontal: "center", vertical: "center" } };
+          }
+          holdingWs[hCell].s = hStyle;
+        }
+      }
+      holdingWs["!cols"] = [{ wch: 25 }, { wch: 51 }, { wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 12 }];
       XLSX.utils.book_append_sheet(wb, holdingWs, "持仓明细");
 
       // Download
-      var today = new Date().toISOString().slice(0, 10);
-      XLSX.writeFile(wb, "蚂蚁财富达人实盘_" + today + ".xlsx");
+      XLSX.writeFile(wb, "蚂蚁财富达人实盘_" + (new Date().toISOString().slice(0, 10)) + ".xlsx");
       showToast("已导出 " + fundData.guruCount + " 位达人数据");
     } catch (err) {
       showToast("导出失败：" + err.message);
